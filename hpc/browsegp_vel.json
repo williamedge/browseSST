@@ -1,0 +1,18 @@
+{
+ "gamma_rot": 0.0717833,
+ "ell_rot": 54360.4,
+ "tau_rot": 382168.0,
+ "gamma_div": 0.119702,
+ "ell_div": 32821.5,
+ "tau_div": 609208.0,
+ "gamma_m4": 0.024774,
+ "ell_m4": 11755.4,
+ "tau_m4": 337169.0,
+ "gamma_f": 0.0681267,
+ "ell_f": 1987.13,
+ "tau_f": 4617.31,
+ "gamma_in": 0.0240912,
+ "ell_in": 18243.4,
+ "tau_in": 233725.0,
+ "_source": "browseGP results/mcmc_M4_v0.01/mcmc_results.json posterior medians (gamma m/s, ell m, tau s); sigma_tide / sigma_mean / sigma_n not used"
+}

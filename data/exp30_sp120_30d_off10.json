@@ -1,0 +1,48 @@
+{
+ "scenario": "sp120",
+ "n_days": 30,
+ "offset_days": 10,
+ "n_rows": 142560,
+ "n_params": 720,
+ "resid_rms": 1.9989043828463164e-06,
+ "score": {
+  "deep": {
+   "tide_err_rms": 0.021110227719153267,
+   "tide_rms": 0.10002800424117905,
+   "rel_err": 0.21104317615149126,
+   "total_rms": 0.1663825482860892,
+   "residual_rms_after_removal": 0.1346179499700898
+  },
+  "shelf": {
+   "tide_err_rms": 0.26290077987804844,
+   "tide_rms": 0.5146488261373044,
+   "rel_err": 0.5108352852006866,
+   "total_rms": 0.5318710734065103,
+   "residual_rms_after_removal": 0.2950005569720498
+  },
+  "M2": {
+   "amp_true_rms": 0.10990255946672152,
+   "amp_err_rms": 0.01614968997546596,
+   "phase_err_rms_deg": 1.8682194859368,
+   "phase_err_median_deg": 1.1435148714068775
+  },
+  "S2": {
+   "amp_true_rms": 0.04396102378668861,
+   "amp_err_rms": 0.006939435129210762,
+   "phase_err_rms_deg": 3.696230317780159,
+   "phase_err_median_deg": 1.78695699599794
+  },
+  "K1": {
+   "amp_true_rms": 0.03663418648890718,
+   "amp_err_rms": 0.006467954339898263,
+   "phase_err_rms_deg": 7.018687419348034,
+   "phase_err_median_deg": 3.279886114049852
+  },
+  "O1": {
+   "amp_true_rms": 0.025643930542235027,
+   "amp_err_rms": 0.0053190191769739185,
+   "phase_err_rms_deg": 11.701655143103755,
+   "phase_err_median_deg": 7.300795865144085
+  }
+ }
+}

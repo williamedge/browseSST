@@ -1,0 +1,38 @@
+{
+ "stage1": {
+  "sigma1": 6.421352316888238,
+  "l1": 236064.68357580996,
+  "tau1": 43200.00000000004,
+  "sigma2": 0.0477996962411066,
+  "l2": 5596.130734554181,
+  "tau2": 6260.471195844255,
+  "noise": 5.468375375492403e-05,
+  "lr:mean": 0.2954746951121699,
+  "lr:diurnal": 0.06221249074871741
+ },
+ "stage2": {
+  "sigma_S": 19.98,
+  "l_S": 17441.0,
+  "tau0_S": 2296.0,
+  "noise": 3.45,
+  "lr:diurnal": 54.6,
+  "gamma_rot": 0.0717833,
+  "ell_rot": 54360.4,
+  "tau_rot": 382168.0,
+  "gamma_div": 0.119702,
+  "ell_div": 32821.5,
+  "tau_div": 609208.0,
+  "gamma_m4": 0.024774,
+  "ell_m4": 11755.4,
+  "tau_m4": 337169.0,
+  "gamma_f": 0.0681267,
+  "ell_f": 1987.13,
+  "tau_f": 4617.31,
+  "gamma_in": 0.0240912,
+  "ell_in": 18243.4,
+  "tau_in": 233725.0
+ },
+ "meta": {
+  "source": "stage 1: hpc/hyper_real_start.json; stage 2: S / noise / diurnal from the exp 41 window-A fit (variant bg3, 2023 cube) and the browseGP velocity parameters of hpc/browsegp_vel.json (start values and prior centres of the velocity fit)"
+ }
+}

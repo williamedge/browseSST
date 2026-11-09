@@ -1,0 +1,29 @@
+{
+ "stage1": {
+  "sigma1": 6.421352316888238,
+  "l1": 236064.68357580996,
+  "tau1": 43200.00000000004,
+  "sigma2": 0.0477996962411066,
+  "l2": 5596.130734554181,
+  "tau2": 6260.471195844255,
+  "noise": 5.468375375492403e-05,
+  "lr:mean": 0.2954746951121699,
+  "lr:diurnal": 0.06221249074871741
+ },
+ "stage2": {
+  "gamma": 0.1,
+  "f_delta": 0.2,
+  "l_psi": 30000.0,
+  "l_phi": 20000.0,
+  "tau0_psi": 172800.0,
+  "tau0_phi": 86400.0,
+  "sigma_S": 0.3,
+  "l_S": 20000.0,
+  "tau0_S": 86400.0,
+  "noise": 708.8730859020587,
+  "lr:diurnal": 0.5
+ },
+ "meta": {
+  "source": "exp 35 stage-1 fit on the real tile (hours 72-120, rows 24-52, cols 24-52; not converged, eddy tau at its 12 h bound) + exp 36 ML stage-2 noise; stage-2 velocity parameters are the placeholder 'fit A'"
+ }
+}
