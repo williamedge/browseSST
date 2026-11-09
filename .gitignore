@@ -2,4 +2,4 @@
 *.ipynb_checkpoints
 *.venv
 *.mp4
-#*.nc
+*.nc
