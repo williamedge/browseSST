@@ -9,7 +9,7 @@ bathymetry points; **NaN where shallower than 100 m or no bathymetry point** - t
 `/mnt/c/Users/00099894/Large_Data/Other/browseSST/test_bb23_may2026.nc` (4.3 MB): copy it to the HPC data directory set in `run_test.py` (`TEST_FILE`).
 
 Coverage of the test month: good (0.8-0.99 per day) on days 0-14 (May 1-15) and 22-27 (May 23-28); a cloud gap on days 15-21 with about zero valid pixels on May 17-19. Weekly tile windows 3 (days 14-20)
-is therefore mostly empty (the tile job skips a block with fewer than `--min-obs` observed pixels).
+is therefore mostly empty (the tile job skips a block with fewer than `--min-obs` observed pixels, or in which fewer than `--min-cover` = 50% of the pixels inside the depth range, i.e. with a finite cube `depth`, are observed; `manifest_tiles.csv` lists this as `cover_deep`).
 
 ## Running the test on the HPC (browseGP style)
 `run_test.py <stage> [pilot] [dry]` is the driver (like `browseGP/scripts/run_*.py`: subprocess, log file in `RUN/logs/`); `sbat_test_<stage>.sbatch` submit one stage; `submit_test.sh` chains them.

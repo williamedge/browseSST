@@ -163,6 +163,7 @@ class TileData:
     hy: np.ndarray
     time: np.ndarray        # datetime64 axis
     weights: np.ndarray     # (nt, ny, nx) blending weights
+    deep: np.ndarray = None  # (ny, nx) bool: pixels inside the depth range (finite `depth` of the cube); None = no depth variable, all pixels count
 
     @property
     def n_obs(self):
@@ -183,6 +184,12 @@ class TileData:
         out[self.obs] = values_obs
         return out
 
+    def cover_deep(self):
+        """Observed fraction of the block's pixels that are inside the depth range (all time steps; all pixels if the cube has no depth variable). 0 if there are none."""
+        o = self.obs.reshape(self.shape)
+        deep = np.ones(self.shape[1:], bool) if self.deep is None else self.deep
+        return float(o[:, deep].mean()) if deep.any() else 0.0
+
     def coverage(self):
         """Observed fraction of the block's ocean pixels (pixels observed at least once), per time step."""
         o = self.obs.reshape(self.shape)
@@ -201,6 +208,7 @@ def extract_tile(cube, spec, step_s=None):
     x2, y2 = frame.forward(lon[None, :], lat[:, None])
     sec = (time - time[0]).astype("timedelta64[s]").astype(np.float64)
     obs = np.isfinite(sst)
+    deep = np.isfinite(np.asarray(cube["depth"].isel(lat=slice(spec.j0, spec.j1), lon=slice(spec.i0, spec.i1)).values, float)) if "depth" in cube else None
     Tref = float(np.nanmean(sst)) if obs.any() else float("nan")
     dlon = float(np.median(np.diff(lon))) if nx > 1 else 0.0
     dlat = float(np.median(np.diff(lat))) if ny > 1 else 0.0
@@ -208,4 +216,4 @@ def extract_tile(cube, spec, step_s=None):
     return TileData(spec=spec, frame=frame, shape=(nt, ny, nx),
                     x=np.broadcast_to(x2, (nt, ny, nx)).ravel().copy(), y=np.broadcast_to(y2, (nt, ny, nx)).ravel().copy(),
                     t=np.broadcast_to(sec[:, None, None], (nt, ny, nx)).ravel().copy(),
-                    T=(sst - Tref).ravel(), obs=obs.ravel(), Tref=Tref, lon=lon, lat=lat, hx=hx, hy=hy, time=time, weights=tile_weights(spec))
+                    T=(sst - Tref).ravel(), obs=obs.ravel(), Tref=Tref, lon=lon, lat=lat, hx=hx, hy=hy, time=time, weights=tile_weights(spec), deep=deep)

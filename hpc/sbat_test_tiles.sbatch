@@ -4,8 +4,8 @@
 #SBATCH --error=browseSST_tiles_%A_%a.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=08:00:00
-#SBATCH --mem=64G
+#SBATCH --time=03:00:00
+#SBATCH --mem=16G
 #SBATCH --partition=work
 #SBATCH --export=ALL
 #SBATCH --mail-type=ALL

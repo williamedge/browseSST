@@ -32,8 +32,13 @@ def main():
         block = np.isfinite(sst.isel(time=slice(s.k0, s.k1), lat=slice(s.j0, s.j1), lon=slice(s.i0, s.i1)).values)
         ocean = block.any(axis=0)
         frac = float(block[:, ocean].mean()) if ocean.any() else 0.0
+        if "depth" in cube:
+            deep = np.isfinite(cube["depth"].isel(lat=slice(s.j0, s.j1), lon=slice(s.i0, s.i1)).values)
+            cover = float(block[:, deep].mean()) if deep.any() else 0.0
+        else:
+            cover = float(block.mean())
         edge = int(s.cj0 == 0) + int(s.cj1 == shape[1]) + int(s.ci0 == 0) + int(s.ci1 == shape[2])
-        rows.append(dict(id=s.id, n_grid=s.n_points, shape="x".join(map(str, s.shape)), n_obs=int(block.sum()), obs_frac=round(frac, 3), ocean_frac=round(float(ocean.mean()), 3), edge_sides=edge))
+        rows.append(dict(id=s.id, n_grid=s.n_points, shape="x".join(map(str, s.shape)), n_obs=int(block.sum()), obs_frac=round(frac, 3), cover_deep=round(cover, 3), ocean_frac=round(float(ocean.mean()), 3), edge_sides=edge))
     meta = dict(cube=str(a.cube), shape=list(shape), core=a.core, buffer=a.buffer, lon0=float(cube["lon"][0]), lat0=float(cube["lat"][0]), t0=str(cube["time"].values[0]))
     TL.write_manifest(a.out, specs, meta)
     csv_path = str(a.out).rsplit(".", 1)[0] + "_tiles.csv"

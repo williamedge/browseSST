@@ -206,6 +206,7 @@ class PipelineConfig:
     noise_mode: str = "fixed"          # stage-2 noise: 'fixed' (Hyper.stage2['noise']) or 'mle' (scalar maximum likelihood on the tile)
     tide_mask: str = "supported"       # 'supported': tide 0 where the regional fit has no support; 'none': always apply the (extrapolated) tide
     min_obs: int = 2000                # skip a tile with fewer observed pixels
+    min_cover: float = 0.5             # skip a tile if fewer than this fraction of its pixels inside the depth range (finite cube `depth`) are observed (0 = off)
     tt_sd_factor: float = 3.0          # drop stage-2 rows whose posterior sd of dT/dt exceeds this multiple of the median (large gaps); 0 = keep all
     stage1_maxiter: int = 0            # >0: refit stage 1 on the tile (iterations); the shared values are the start / prior centre
     prior: VelocityPrior = dataclasses.field(default_factory=HelmholtzMaternPrior)
@@ -285,6 +286,10 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     if td.n_obs < cfg.min_obs:
         if log:
             log(f"  tile {td.spec.id}: only {td.n_obs} observed pixels (< {cfg.min_obs}); skipped")
+        return None
+    if cfg.min_cover > 0 and td.cover_deep() < cfg.min_cover:
+        if log:
+            log(f"  tile {td.spec.id}: only {td.cover_deep():.2f} of its pixels in the depth range are observed (< {cfg.min_cover}); skipped")
         return None
     sh = td.shape
     xo, yo, to, To = td.observed()
