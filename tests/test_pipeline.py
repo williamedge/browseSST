@@ -378,6 +378,24 @@ def test_browsegp_prior_free_velocity_parameters_and_fit_hyper():
     assert out is not None and np.isfinite(out["u"]).all()
 
 
+def test_tiles_with_low_coverage_inside_the_depth_range_are_skipped():
+    cube = _fake_cube(nt=12, ny=12, nx=12, seed=3)
+    spec = TL.TileSpec("s", 0, 12, 0, 12, 0, 12, 0, 12, 0, 12, 0, 12)
+    depth = np.full((12, 12), 500.0); depth[:, :6] = np.nan                  # the west half is shallow (masked)
+    cube = cube.assign(depth=(("lat", "lon"), depth))
+    sst = cube["sst"].values.copy()
+    sst[:, :, 6:] = np.where(np.arange(12)[:, None, None] < 4, sst[:, :, 6:], np.nan)      # the deep half is observed only 4 of 12 hours (1/3)
+    sst[:, :, :6] = 290.0                                                        # the shallow half fully observed: must not count
+    cube["sst"] = (("time", "lat", "lon"), sst)
+    td = TL.extract_tile(cube, spec)
+    assert abs(td.cover_deep() - 1 / 3) < 1e-9 and td.deep.sum() == 72
+    cfg = P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100)
+    assert cfg.min_cover == 0.5 and P.run_tile(td, P.Hyper.default(), cfg, tide=None, log=None) is None
+    assert td.cover_deep() < 0.5
+    td2 = TL.extract_tile(_fake_cube(nt=12, ny=12, nx=12, seed=3), spec)      # no depth variable: all pixels count
+    assert td2.deep is None and td2.cover_deep() > 0.5
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
