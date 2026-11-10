@@ -3,6 +3,7 @@
 #   bash submit_test.sh pilot   : manifest, then ONE pilot tile (and a pilot tide fit); read the time / memory with `sacct -j <jobid> --format=JobID,Elapsed,MaxRSS,State`
 #   bash submit_test.sh         : the full chain (run the pilot first and size --mem / --time in the sbat_test_*.sbatch files from it)
 # Paths: the same constants as run_test.py (edit there or set BSST_ROOT / BSST_TEST_FILE / BSST_RUN).
+source activate /group/oi019/wedge/env/drift
 set -euo pipefail
 cd "$(dirname "$0")"
 MODE=${1:-full}
