@@ -11,7 +11,18 @@ def log(msg):
 
 
 def set_threads():
-    """Respect SLURM's allocation for numba / BLAS before they are imported by the heavy modules."""
+    """Respect SLURM's allocation for numba / BLAS before they are imported by the heavy modules, and give each SLURM job its OWN numba cache directory (node-local temp dir, removed at exit): the jitted
+    functions are `cache=True`, and concurrent array tasks sharing one cache index corrupted it (KeyError / 'underlying object has vanished' in numba.core.caching; 24 of 27 tiles of the first full run).
+    An NUMBA_CACHE_DIR set by the caller is kept."""
+    job = os.environ.get("SLURM_JOB_ID")
+    if job and "NUMBA_CACHE_DIR" not in os.environ:
+        import atexit
+        import shutil
+        import tempfile
+        d = os.path.join(tempfile.gettempdir(), f"numba_cache_{job}_{os.environ.get('SLURM_ARRAY_TASK_ID', '0')}_{os.getpid()}")
+        os.makedirs(d, exist_ok=True)
+        os.environ["NUMBA_CACHE_DIR"] = d
+        atexit.register(shutil.rmtree, d, True)
     n = os.environ.get("SLURM_CPUS_PER_TASK")
     if n:
         for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
