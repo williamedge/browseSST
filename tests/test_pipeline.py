@@ -392,8 +392,31 @@ def test_tiles_with_low_coverage_inside_the_depth_range_are_skipped():
     cfg = P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100)
     assert cfg.min_cover == 0.5 and P.run_tile(td, P.Hyper.default(), cfg, tide=None, log=None) is None
     assert td.cover_deep() < 0.5
+    depth2 = np.full((12, 12), 500.0); depth2[:, 6:] = 150.0
+    td3 = TL.extract_tile(cube.assign(depth=(('lat', 'lon'), depth2)), spec, min_depth=200.0)      # min_depth narrows the depth range
+    assert td3.deep.sum() == 72 and td3.deep[:, :6].all() and not td3.deep[:, 6:].any()
     td2 = TL.extract_tile(_fake_cube(nt=12, ny=12, nx=12, seed=3), spec)      # no depth variable: all pixels count
     assert td2.deep is None and td2.cover_deep() > 0.5
+
+
+def test_depth_mask_restricts_stage2_and_outputs_to_deep_pixels():
+    cube = _fake_cube(nt=12, ny=12, nx=12, seed=3)
+    spec = TL.TileSpec("s", 0, 12, 0, 12, 0, 12, 0, 12, 0, 12, 0, 12)
+    depth = np.full((12, 12), 400.0); depth[:, 8:] = 150.0                      # the east third is 'shallow' for a 250 m threshold
+    cube = cube.assign(depth=(("lat", "lon"), depth))
+    hyper = P.Hyper.default(); hyper.stage2["noise"] = 5.0
+    td = TL.extract_tile(cube, spec, min_depth=250.0)
+    assert td.deep.sum() == 96
+    out0 = P.run_tile(td, hyper, P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, min_cover=0), tide=None, log=None)
+    out1 = P.run_tile(td, hyper, P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, min_cover=0, depth_mask=True), tide=None, log=None)
+    assert np.isfinite(out0["u"]).all()                                          # default: no depth mask, whole block predicted
+    shallow = np.broadcast_to(~td.deep, td.shape)
+    for k in ("u", "v", "u_eddy", "v_eddy", "var_u", "var_v", "S", "var_S", "u_tide", "v_tide"):
+        assert np.isnan(out1[k][shallow]).all() and np.isfinite(out1[k][~shallow]).all(), k
+    assert np.isfinite(out1["T"]).all() and np.isfinite(out1["Tt"]).all()           # stage 1 is not masked
+    assert out1["info"]["n_stage2"] < out0["info"]["n_stage2"] and (out1["tide_supported"][shallow] == 0).all()
+    h = P.fit_hyper(td, hyper, P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, depth_mask=True), maxiter1=1, maxiter2=1, log=None)
+    assert h.meta["n_stage2"] == out1["info"]["n_stage2"]                            # the hyper fit uses the same rows
 
 
 if __name__ == "__main__":

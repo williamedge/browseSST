@@ -20,6 +20,8 @@ def main():
     ap.add_argument("--out-dir", required=True); ap.add_argument("--force", action="store_true")
     ap.add_argument("--nnum", type=int, default=100); ap.add_argument("--nnum-pred", type=int, default=200)
     ap.add_argument("--noise-mode", default="fixed", choices=("fixed", "mle")); ap.add_argument("--min-obs", type=int, default=2000)
+    ap.add_argument("--min-depth", type=float, default=0.0, help="m; pixels shallower than this do not count for --min-cover (the cube's own depth mask, NaN below its threshold, always applies)")
+    ap.add_argument("--no-depth-mask", action="store_true", help="do not restrict stage 2 and the outputs to pixels at least --min-depth deep (default: restrict; velocity / S are NaN in shallower water)")
     ap.add_argument("--min-cover", type=float, default=0.5, help="skip a tile if fewer than this fraction of its pixels inside the depth range (finite cube depth) are observed; 0 = off")
     ap.add_argument("--tide-mask", default="supported", choices=("supported", "none"))
     _util.add_prior_args(ap)
@@ -35,11 +37,11 @@ def main():
         return
     spec = next(s for s in specs if s.id == tid)
     cube = xr.open_dataset(a.cube)
-    td = TL.extract_tile(cube, spec)
+    td = TL.extract_tile(cube, spec, min_depth=a.min_depth)
     hyper = P.Hyper.load(a.hyper)
     tide = RG.ArrayTide(cube) if a.tide_from_cube else (RG.TideModel.load(a.tide) if a.tide else None)
     prior = _util.make_prior(a)
-    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=a.nnum_pred, noise_mode=a.noise_mode, min_obs=a.min_obs, min_cover=a.min_cover, tide_mask=a.tide_mask, **({} if prior is None else dict(prior=prior)))
+    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=a.nnum_pred, noise_mode=a.noise_mode, min_obs=a.min_obs, min_cover=a.min_cover, depth_mask=not a.no_depth_mask, tide_mask=a.tide_mask, **({} if prior is None else dict(prior=prior)))
     _util.log(f"tile {tid}: block {td.shape} ({td.x.size} points), {td.n_obs} observed, tide {'yes' if tide else 'no'}")
     out = P.run_tile(td, hyper, cfg, tide=tide, log=_util.log)
     if out is None:

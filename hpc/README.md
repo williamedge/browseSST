@@ -51,3 +51,11 @@ optionally `m4` and `inertial` (`--blocks rot,div,fast` is the default: M4 and i
 - Propagated (multiple-imputation) variance: the returned variances are the stage-2 block variances only.
 - The SST-regression tide could not be validated on the real test month (notes: exp 34); the external-tide option exists for that reason.
 - Cloud gaps: a guard drops stage-2 rows where the latent dT/dt is very uncertain (`tt_sd_factor`); the temporal seam between weekly windows was tested only on synthetic data with a 6 h buffer.
+
+## Depth range (`BSST_MIN_DEPTH`, one threshold for every stage)
+- tide: blocks (5 x 5 px) whose mean depth is below it are dropped (`run_tide.py --min-depth`);
+- stage 1 (latent T): uses ALL observed SST, so that T and dT/dt (and the gradients at the edge of the deep region) are not distorted; `T` and `Tt` are written everywhere;
+- stage 2 (hyper fit and tile jobs): only rows at pixels at least this deep (`--min-depth`; `--no-depth-mask` switches it off); prediction only there, so the tile is also cheaper;
+- outputs: `u, v, u_eddy, v_eddy, u_tide, v_tide, var_u, var_v, S, var_S` are NaN in shallower water, `tide_supported` is 0; the merge leaves those pixels NaN;
+- coverage rule (`--min-cover`) and the manifest's `cover_deep` / `deep_frac` columns count only pixels inside the range; sample tiles are ranked by them.
+The cube's own `depth` is NaN below 100 m (`make_test_dataset.py --mask-depth`), so thresholds below 100 change nothing.

@@ -21,6 +21,7 @@ def main():
     ap.add_argument("--maxiter1", type=int, default=25); ap.add_argument("--maxiter2", type=int, default=25)
     ap.add_argument("--nnum", type=int, default=100); ap.add_argument("--noise-mode", default="fixed", choices=("fixed", "mle"))
     ap.add_argument("--fit-hours", type=int, default=0, help="fit on the central N hours of the tile only (cost is linear in the number of points; 0 = the whole buffered tile)")
+    ap.add_argument("--min-depth", type=float, default=0.0, help="m; stage 2 uses only pixels at least this deep (with the cube's own depth mask)"); ap.add_argument("--no-depth-mask", action="store_true")
     _util.add_prior_args(ap)
     a = ap.parse_args()
     _util.set_threads()
@@ -34,11 +35,11 @@ def main():
         import dataclasses
         k0 = spec.k0 + ((spec.k1 - spec.k0) - a.fit_hours) // 2
         spec = dataclasses.replace(spec, k0=k0, k1=k0 + a.fit_hours, ck0=k0, ck1=k0 + a.fit_hours)
-    td = TL.extract_tile(cube, spec)
+    td = TL.extract_tile(cube, spec, min_depth=a.min_depth)
     tide = RG.ArrayTide(cube) if a.tide_from_cube else (RG.TideModel.load(a.tide) if a.tide else None)
     h0 = P.Hyper.load(a.hyper_in) if a.hyper_in else P.Hyper.default()
     prior = _util.make_prior(a)
-    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=2 * a.nnum, noise_mode=a.noise_mode, **({} if prior is None else dict(prior=prior)))
+    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=2 * a.nnum, noise_mode=a.noise_mode, depth_mask=not a.no_depth_mask, **({} if prior is None else dict(prior=prior)))
     _util.log(f"tile {tid}: {td.shape}, {td.n_obs} observed of {td.x.size}; tide {'yes' if tide else 'no'}")
     h = P.fit_hyper(td, h0, cfg, tide=tide, maxiter1=a.maxiter1, maxiter2=a.maxiter2, log=_util.log)
     out = pathlib.Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)

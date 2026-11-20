@@ -206,6 +206,7 @@ class PipelineConfig:
     noise_mode: str = "fixed"          # stage-2 noise: 'fixed' (Hyper.stage2['noise']) or 'mle' (scalar maximum likelihood on the tile)
     tide_mask: str = "supported"       # 'supported': tide 0 where the regional fit has no support; 'none': always apply the (extrapolated) tide
     min_obs: int = 2000                # skip a tile with fewer observed pixels
+    depth_mask: bool = False           # True: stage 2 uses only rows at pixels inside the depth range (`td.deep`, i.e. depth >= the `min_depth` given to `extract_tile`), the velocity / S outputs are NaN elsewhere and are only predicted inside it. Stage 1 (latent T) always uses all SST.
     min_cover: float = 0.5             # skip a tile if fewer than this fraction of its pixels inside the depth range (finite cube `depth`) are observed (0 = off)
     tt_sd_factor: float = 3.0          # drop stage-2 rows whose posterior sd of dT/dt exceeds this multiple of the median (large gaps); 0 = keep all
     stage1_maxiter: int = 0            # >0: refit stage 1 on the tile (iterations); the shared values are the start / prior centre
@@ -238,11 +239,19 @@ def stage1_products(td, gp, cfg, nn=None):
     return Tm, Ttm, vTt
 
 
+def deep_points(td, cfg):
+    """Flat bool over the block's grid points: inside the depth range if `cfg.depth_mask` and the tile has a depth mask, else all True."""
+    if cfg.depth_mask and td.deep is not None:
+        return np.broadcast_to(td.deep, td.shape).ravel()
+    return np.ones(td.x.size, bool)
+
+
 def stage2_rows(td, Tm, Ttm, vTt, ub, vb, cfg):
     """z and the design rows (-Tx, -Ty, 1) at the grid points that carry usable products. Returns (idx, Tx, Ty, z) with Tx, Ty, z full length."""
     Tx, Ty = td.gradients(Tm, cfg.order)
     z = Ttm + Tx * ub + Ty * vb
     ok = np.isfinite(Tx) & np.isfinite(Ty) & np.isfinite(z)
+    ok &= deep_points(td, cfg)
     if cfg.tt_sd_factor and cfg.tt_sd_factor > 0:
         sd = np.sqrt(np.maximum(vTt, 0.0))
         ref = np.median(sd[ok & td.obs]) if (ok & td.obs).any() else np.median(sd[ok])
@@ -310,16 +319,25 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     noise = h2["noise"]
     if cfg.noise_mode == "mle":
         noise = fit_noise_mle(gp2)
-    nn2 = gp2.pred_neighbours(td.x, td.y, td.t, cfg.nnum_pred)
+    dp = deep_points(td, cfg)
+    qx, qy, qt = td.x[dp], td.y[dp], td.t[dp]                       # prediction points: the whole block, or only its deep part with the depth mask
+    nn2 = gp2.pred_neighbours(qx, qy, qt, cfg.nnum_pred)
     tim["stage2_build"] = time.time() - t0
     t0 = time.time()
-    u, vu = gp2.predict("u", td.x, td.y, td.t, nn_array=nn2)
-    v, vv = gp2.predict("v", td.x, td.y, td.t, nn_array=nn2)
-    S, vS = gp2.predict("S", td.x, td.y, td.t, nn_array=nn2)
+    u, vu = gp2.predict("u", qx, qy, qt, nn_array=nn2)
+    v, vv = gp2.predict("v", qx, qy, qt, nn_array=nn2)
+    S, vS = gp2.predict("S", qx, qy, qt, nn_array=nn2)
     tim["stage2_predict"] = time.time() - t0
+
+    def full(a):                                                    # back to the whole block, NaN outside the depth range
+        o = np.full(td.x.size, np.nan)
+        o[dp] = a
+        return o
+    u, vu, v, vv, S, vS = (full(a) for a in (u, vu, v, vv, S, vS))
+    ub, vb, sup = (np.where(dp, a, np.nan) for a in (ub, vb, sup.astype(float)))
     r = lambda a: np.asarray(a, float).reshape(sh)
     out = dict(T=r(Tm + td.Tref), Tt=r(Ttm), u_eddy=r(u), v_eddy=r(v), var_u=r(vu), var_v=r(vv), S=r(S * ZS * DAY), var_S=r(vS * (ZS * DAY) ** 2),
-               u_tide=r(ub), v_tide=r(vb), u=r(u + ub), v=r(v + vb), tide_supported=r(sup).astype(np.int8))
+               u_tide=r(ub), v_tide=r(vb), u=r(u + ub), v=r(v + vb), tide_supported=np.nan_to_num(r(sup)).astype(np.int8))
     out["info"] = dict(tile=td.spec.id, n_grid=int(td.x.size), n_obs=int(td.n_obs), n_stage2=int(idx.size), noise_stage2=float(noise), tide=tide is not None,
                        seconds=time.time() - t_all, timings=tim, stage1_used=h1, mean_coverage=float(td.coverage().mean()))
     if log:

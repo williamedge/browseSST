@@ -33,7 +33,7 @@ RUN = Path(os.environ.get('BSST_RUN', '/group/oi019/wedge/data/browseSST/run_tes
 HPC = ROOT / 'hpc'
 CORE = os.environ.get('BSST_CORE', '168,28,28').split(',')      # tile core: hours, lat cells, lon cells (1 week x 1 deg x 1 deg at 4 km)
 BUFFER = os.environ.get('BSST_BUFFER', '12,4,4').split(',')     # buffer on the sides that border another tile
-MIN_DEPTH = '100'                 # m; the test file already has depths < 100 m set to NaN
+MIN_DEPTH = os.environ.get('BSST_MIN_DEPTH', '100')   # m: the tide fit drops blocks shallower than this, and the tile coverage rule ignores shallower pixels (the test file already has depths < 100 m set to NaN, so values < 100 change nothing)
 PRIOR = os.environ.get('BSST_PRIOR', 'helmholtz')              # 'browsegp': stage-2 velocity prior = browseGP's in-situ model (blocks BSST_BLOCKS), its velocity parameters FITTED on the sample tiles for the blocks in BSST_FREE_VEL
 BLOCKS = os.environ.get('BSST_BLOCKS', 'rot,div,fast')
 FREE_VEL = os.environ.get('BSST_FREE_VEL', 'rot,div,fast')     # '' = keep browseGP's values fixed
@@ -65,7 +65,7 @@ def commands():
     py = ['python', '-u']
     k = os.environ.get('SLURM_ARRAY_TASK_ID')
     if STAGE == 'manifest':
-        return py + [str(HPC / 'make_manifest.py'), '--cube', TEST_FILE, '--core', *CORE, '--buffer', *BUFFER, '--out', str(RUN / 'manifest.json'), '--n-sample', '4']
+        return py + [str(HPC / 'make_manifest.py'), '--cube', TEST_FILE, '--core', *CORE, '--buffer', *BUFFER, '--out', str(RUN / 'manifest.json'), '--n-sample', '4', '--min-depth', MIN_DEPTH]
     if STAGE == 'tide':
         return py + [str(HPC / 'run_tide.py'), '--cube', TEST_FILE, '--out-dir', str(RUN / 'tide'), '--min-depth', MIN_DEPTH, '--time-stride', '6' if PILOT else '2', '--n-jobs', str(NCORES), '--nuisance-t-days', '1', '--spacing', '150e3']
     if STAGE == 'hyper':
@@ -74,14 +74,14 @@ def commands():
         idx = ['--array-index', k] if k is not None else ['--tile', tiles.split(',')[0]]
         return py + [str(HPC / 'fit_hyper.py'), '--cube', TEST_FILE, '--manifest', str(RUN / 'manifest.json'), '--tiles', tiles, *idx, *tide_args(),
                      '--hyper-in', str(HPC / ('hyper_browsegp_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')), '--out-dir', str(RUN / 'hyper'), '--maxiter1', it, '--maxiter2', it, '--noise-mode', 'mle',
-                     '--fit-hours', FIT_HOURS, *prior_args(fit=True)]
+                     '--fit-hours', FIT_HOURS, '--min-depth', MIN_DEPTH, *prior_args(fit=True)]
     if STAGE == 'pool':
         return py + [str(HPC / 'pool_hyper.py'), '--inputs', *sorted(glob.glob(str(RUN / 'hyper' / 'hyper_*.json'))), '--out', str(RUN / 'hyper.json')]
     if STAGE == 'tiles':
         hyper = RUN / 'hyper.json' if (RUN / 'hyper.json').exists() else HPC / ('hyper_browsegp_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')
         sel = ['--tile', sample_tiles().split(',')[0]] if (PILOT or k is None) else ['--array-index', k]
         return py + [str(HPC / 'run_tile.py'), '--cube', TEST_FILE, '--manifest', str(RUN / 'manifest.json'), '--hyper', str(hyper), *tide_args(),
-                     '--out-dir', str(RUN / ('tiles_pilot' if PILOT else 'tiles')), *sel, *prior_args()]
+                     '--out-dir', str(RUN / ('tiles_pilot' if PILOT else 'tiles')), *sel, '--min-depth', MIN_DEPTH, *prior_args()]
     if STAGE == 'merge':
         return py + [str(HPC / 'merge.py'), '--cube', TEST_FILE, '--manifest', str(RUN / 'manifest.json'), '--tiles-dir', str(RUN / 'tiles'), '--out', str(RUN / 'merged.nc')]
     sys.exit(f'unknown stage {STAGE!r}; use manifest | tide | hyper | pool | tiles | merge')

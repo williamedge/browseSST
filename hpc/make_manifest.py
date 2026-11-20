@@ -20,6 +20,7 @@ def main():
     ap.add_argument("--cube", required=True)
     ap.add_argument("--core", nargs=3, type=int, default=[168, 28, 28]); ap.add_argument("--buffer", nargs=3, type=int, default=[12, 4, 4])
     ap.add_argument("--out", required=True)
+    ap.add_argument("--min-depth", type=float, default=0.0, help="m; depth range of the `cover_deep` column (pixels shallower than this are ignored)")
     ap.add_argument("--n-sample", type=int, default=4, help="number of sample tiles (best coverage, away from the domain edge) for the hyperparameter fits")
     a = ap.parse_args()
     from inversion_sst_gp.spacetime import tiling as TL
@@ -33,19 +34,21 @@ def main():
         ocean = block.any(axis=0)
         frac = float(block[:, ocean].mean()) if ocean.any() else 0.0
         if "depth" in cube:
-            deep = np.isfinite(cube["depth"].isel(lat=slice(s.j0, s.j1), lon=slice(s.i0, s.i1)).values)
+            dep = cube["depth"].isel(lat=slice(s.j0, s.j1), lon=slice(s.i0, s.i1)).values
+            deep = np.isfinite(dep) & (dep >= a.min_depth)
             cover = float(block[:, deep].mean()) if deep.any() else 0.0
+            deep_frac = float(deep.mean())
         else:
-            cover = float(block.mean())
+            cover, deep_frac = float(block.mean()), 1.0
         edge = int(s.cj0 == 0) + int(s.cj1 == shape[1]) + int(s.ci0 == 0) + int(s.ci1 == shape[2])
-        rows.append(dict(id=s.id, n_grid=s.n_points, shape="x".join(map(str, s.shape)), n_obs=int(block.sum()), obs_frac=round(frac, 3), cover_deep=round(cover, 3), ocean_frac=round(float(ocean.mean()), 3), edge_sides=edge))
+        rows.append(dict(id=s.id, n_grid=s.n_points, shape="x".join(map(str, s.shape)), n_obs=int(block.sum()), obs_frac=round(frac, 3), cover_deep=round(cover, 3), deep_frac=round(deep_frac, 3), ocean_frac=round(float(ocean.mean()), 3), edge_sides=edge))
     meta = dict(cube=str(a.cube), shape=list(shape), core=a.core, buffer=a.buffer, lon0=float(cube["lon"][0]), lat0=float(cube["lat"][0]), t0=str(cube["time"].values[0]))
     TL.write_manifest(a.out, specs, meta)
     csv_path = str(a.out).rsplit(".", 1)[0] + "_tiles.csv"
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
-    # sample tiles: best coverage and mostly ocean, preferring tiles away from the domain edge and in distinct places (spread over space / time)
-    cand = sorted(rows, key=lambda r: (r["edge_sides"], -r["obs_frac"] * r["ocean_frac"]))
+    # sample tiles: best coverage inside the depth range (observed fraction x fraction of the block that is deep) and mostly ocean, preferring tiles away from the domain edge and in distinct places (spread over space / time)
+    cand = sorted(rows, key=lambda r: (r["edge_sides"], -r["cover_deep"] * r["deep_frac"] * r["ocean_frac"]))
     ids = [r["id"] for r in cand[:a.n_sample]]
     open(str(a.out).rsplit(".", 1)[0] + "_sample_tiles.txt", "w").write(",".join(ids) + "\n")
     n = [r["n_grid"] for r in rows]

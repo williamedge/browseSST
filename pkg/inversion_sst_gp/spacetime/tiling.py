@@ -197,7 +197,7 @@ class TileData:
         return o[:, ocean].mean(axis=1) if ocean.any() else np.zeros(self.shape[0])
 
 
-def extract_tile(cube, spec, step_s=None):
+def extract_tile(cube, spec, step_s=None, min_depth=0.0):
     """Cut `spec` out of a cube from `himawari.load_cube` (or any Dataset with `sst(time, lat, lon)`), project to the block's local frame, remove the mean."""
     sst = np.asarray(cube["sst"].isel(time=slice(spec.k0, spec.k1), lat=slice(spec.j0, spec.j1), lon=slice(spec.i0, spec.i1)).values, np.float64)   # lazy: reads only the block
     nt, ny, nx = sst.shape
@@ -208,7 +208,11 @@ def extract_tile(cube, spec, step_s=None):
     x2, y2 = frame.forward(lon[None, :], lat[:, None])
     sec = (time - time[0]).astype("timedelta64[s]").astype(np.float64)
     obs = np.isfinite(sst)
-    deep = np.isfinite(np.asarray(cube["depth"].isel(lat=slice(spec.j0, spec.j1), lon=slice(spec.i0, spec.i1)).values, float)) if "depth" in cube else None
+    if "depth" in cube:
+        dep = np.asarray(cube["depth"].isel(lat=slice(spec.j0, spec.j1), lon=slice(spec.i0, spec.i1)).values, float)
+        deep = np.isfinite(dep) & (dep >= min_depth)           # pixels inside the depth range (used by the coverage rule `min_cover`)
+    else:
+        deep = None
     Tref = float(np.nanmean(sst)) if obs.any() else float("nan")
     dlon = float(np.median(np.diff(lon))) if nx > 1 else 0.0
     dlat = float(np.median(np.diff(lat))) if ny > 1 else 0.0

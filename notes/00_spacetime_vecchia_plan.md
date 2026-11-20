@@ -1045,6 +1045,14 @@ User: "We can free the params on the HPC tile jobs." Built (not run on the HPC; 
   tiles (`pool_hyper.py` prints the max / min ratio), and then whether the fitted-parameter eddy velocity has skill against drifters / ADCP (exp 40 / 41 scoring, unchanged).
 - Cost on the HPC: a likelihood evaluation scales with the number of rows, so a fit on a full 192 h x 36 x 36 buffered tile is ~10x the pilot (estimate from the row count, not timed: ~1 min per evaluation, ~15 evaluations per iteration): use `--fit-hours 48-96`.
 
+## Depth mask across all stages (2026-11-20)
+
+User: deepen the depth restriction; the M2 divergent kernel is expected to fail in 100-250 m. One threshold `BSST_MIN_DEPTH` (default 100, `hpc/env_2023_browsegp.sh` sets 250) now applies to the tide fit blocks, the stage-2 rows
+(`PipelineConfig.depth_mask`, CLI default on, `--no-depth-mask`), the prediction points and the outputs (NaN in the shallow water; T, Tt unmasked: stage 1 keeps all SST), and the coverage rule / manifest columns (`cover_deep`,
+`deep_frac`). Tests: `test_depth_mask_restricts_stage2_and_outputs_to_deep_pixels`, extended coverage test. Local pilot with 250 m on the 2023 cube: tide M2 0.107 / 0.118, S2 0.068 / 0.053 m/s (u / v medians; 100 m: 0.095 / 0.134 and
+0.088 / 0.058); tile output NaN exactly outside the deep pixels. Fraction of the box deeper than 100 / 150 / 200 / 250 (0.46) / 300 / 500 m: 0.70 / 0.57 / 0.51 / ~0.46 / 0.38 / 0.18. Exp 38 earlier found a 180 m tide crop worse than 100 m on
+the BB23 validation: compare the 250 m tide against the moorings before trusting it. Also fixed: numba cache directory per SLURM job (first full run, 2026 cube, lost 24 of 27 tiles to a shared-cache crash).
+
 ## Status at pause (2026-11-03)
 
 Built and tested (tests/ pass): `spacetime/{kernels,synthetic,inference,model,fit,fastop}.py`.
