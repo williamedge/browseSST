@@ -44,11 +44,14 @@ def tile_id_from_args(args, ids):
 def add_prior_args(ap):
     """The stage-2 velocity prior options shared by fit_hyper.py and run_tile.py."""
     ap.add_argument("--prior", default="helmholtz", choices=("helmholtz", "browsegp"), help="stage-2 velocity covariance: the Matern Helmholtz default, or browseGP's in-situ model")
-    ap.add_argument("--vel-json", help="browsegp: browseGP velocity parameters (mcmc_results.json or a plain {name: value} json); default hpc/browsegp_vel.json")
-    ap.add_argument("--blocks", default="rot,div,fast", help="browsegp: velocity blocks that are on (rot, div = M2 wave, m4, fast, inertial)")
-    ap.add_argument("--free-vel", default="", help="browsegp, fit_hyper only: blocks whose (gamma, ell, tau) are FITTED on the sample tile ('all' = every block that is on); default none = fixed at browseGP's values")
+    ap.add_argument("--vel-json", help="browsegp: browseGP velocity parameters (results.json / mcmc_results.json or a plain {name: value} json); default hpc/browsegp_vel_v008.json (v0.08)")
+    ap.add_argument("--blocks", default="rot,div,d2", help="browsegp: velocity blocks that are on: rot (= the 'eddy'), div (M2 wave), d2 (short-scale / mode-2 M2 block), m4 (instead of d2), fast, inertial")
+    ap.add_argument("--div-kernel", default="ring", choices=("ring", "matern"), help="browsegp: spatial kernel of the M2 wave block: browseGP's ring (Matern x J0(k1 r), parameter c1) or the plain Matern wave")
+    ap.add_argument("--free-vel", default="", help="browsegp, fit_hyper only: blocks whose (gamma, ell, tau) [+ c1 for a ring] are FITTED on the sample tile ('all' = every block that is on); default none = fixed at browseGP's values")
+    ap.add_argument("--fix-vel", default="ell_div,tau_div", help="browsegp, fit_hyper only: parameter names kept fixed even in a free block (default: the M2 wave's length and time scale, which are much larger than a tile and not identifiable on it)")
     ap.add_argument("--vel-prior-sd", type=float, default=1.0, help="browsegp: sd (log units) of the log-normal prior on the fitted velocity parameters, centred on the start values")
-    ap.add_argument("--lat", type=float, default=-14.0, help="browsegp: latitude for the inertial frequency (only if the inertial block is on)")
+    ap.add_argument("--lat", type=float, default=-14.0, help="browsegp: latitude for the Coriolis parameter (ring wavenumber, inertial block)")
+    ap.add_argument("--no-block-outputs", action="store_true", help="browsegp, run_tile only: do not write the block-by-block fields (u_eddy = rotational only, u_m2, u_m2w, ...); u_eddy is then the total")
 
 
 def make_prior(a):
@@ -57,8 +60,11 @@ def make_prior(a):
         return None
     import pathlib
     from inversion_sst_gp.spacetime import pipeline as P
-    path = a.vel_json or str(pathlib.Path(__file__).resolve().parent / "browsegp_vel.json")
+    path = a.vel_json or str(pathlib.Path(__file__).resolve().parent / "browsegp_vel_v008.json")
     blocks = tuple(b for b in a.blocks.split(",") if b)
     free = getattr(a, "free_vel", "")
     free_vel = True if free == "all" else tuple(b for b in free.split(",") if b)
-    return P.BrowseGPPrior.from_results(path, blocks=blocks, lat=a.lat, free_vel=free_vel, prior_sd_log={n: a.vel_prior_sd for names in P.BrowseGPPrior.VEL_NAMES.values() for n in names})
+    fixed = tuple(n for n in getattr(a, "fix_vel", "").split(",") if n)
+    sd = {n: a.vel_prior_sd for names in P.BrowseGPPrior.VEL_NAMES.values() for n in names}
+    sd["c1"] = a.vel_prior_sd
+    return P.BrowseGPPrior.from_results(path, blocks=blocks, lat=a.lat, free_vel=free_vel, prior_sd_log=sd, div_kernel=a.div_kernel, fixed=fixed)

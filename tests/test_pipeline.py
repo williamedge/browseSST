@@ -307,7 +307,7 @@ def test_browsegp_prior_and_run_tile():
     pr = P.BrowseGPPrior.from_results(res) if res.exists() else P.BrowseGPPrior(vel)
     h2 = dict(P.DEFAULT_STAGE2)
     cp = pr.cov_params(h2)
-    assert cp.size == 28 and abs(cp[0] - pr.vel["gamma_rot"] * pr.vel["ell_rot"] * np.sqrt(0.6)) < 1e-9 and cp[24] == h2["sigma_S"]
+    assert cp.size == 29 and cp[28] == 0.0 and abs(cp[0] - pr.vel["gamma_rot"] * pr.vel["ell_rot"] * np.sqrt(0.6)) < 1e-9 and cp[24] == h2["sigma_S"]
     assert pr.free == ("sigma_S", "l_S", "tau0_S", "lr:diurnal", "noise") and {"sigma_S", "l_S", "tau0_S", "ell_rot", "tau_f"} <= set(pr.slots)      # velocity parameters FIXED by default
     pr2 = P.BrowseGPPrior(pr.vel, blocks=("rot", "div"))
     assert pr2.cov_params(h2)[16] == 0.0 and pr2.cov_params(h2)[19] == 0.0 and pr2.cov_params(h2)[10] == 0.0
@@ -415,8 +415,84 @@ def test_depth_mask_restricts_stage2_and_outputs_to_deep_pixels():
         assert np.isnan(out1[k][shallow]).all() and np.isfinite(out1[k][~shallow]).all(), k
     assert np.isfinite(out1["T"]).all() and np.isfinite(out1["Tt"]).all()           # stage 1 is not masked
     assert out1["info"]["n_stage2"] < out0["info"]["n_stage2"] and (out1["tide_supported"][shallow] == 0).all()
+    depth3 = np.full((12, 12), 100.0); depth3[5:7, 5:7] = 400.0                    # only 4 deep pixels: enough coverage, no usable rows
+    td3 = TL.extract_tile(cube.assign(depth=(("lat", "lon"), depth3)), spec, min_depth=250.0)
+    cfg3 = P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, min_cover=0.0, depth_mask=True)
+    assert P.run_tile(td3, hyper, cfg3, tide=None, log=None) is None                # skipped, not a crash
     h = P.fit_hyper(td, hyper, P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, depth_mask=True), maxiter1=1, maxiter2=1, log=None)
     assert h.meta["n_stage2"] == out1["info"]["n_stage2"]                            # the hyper fit uses the same rows
+
+
+def test_browsegp_ring_kernel_and_second_m2_block_match_browsegp():
+    """The M2 wave block with k1 > 0 is browseGP's ring tensor (Matern-5/2 x J0), the second wave slot can be the mode-2 M2 block (Matern, k = 0) at the M2 frequency, and the ring / d2 amplitudes are
+    parameterised by gamma (rms per component) exactly as browseGP's `ring_sigma`."""
+    from browseGP.covariance import helmholtz_ring_numba as RN
+    from browseGP.covariance import helmholtz_numba as HN
+    from inversion_sst_gp.spacetime import kernels as K
+    from inversion_sst_gp.spacetime.tides import omega_of
+    vel = dict(_BG_VEL); vel.update(ell_div=135e3, tau_div=5.46e5, c1=1.456, gamma_div=0.117, gamma_d2=0.042, ell_d2=7.3e3, tau_d2=3.39e5)
+    pr = P.BrowseGPPrior(vel, blocks=("rot", "div", "d2"), div_kernel="ring", lat=-13.8)
+    h2 = pr.complete(dict(P.DEFAULT_STAGE2))
+    cp = pr.cov_params(h2)
+    om = omega_of("M2"); f = 2 * 7.2921159e-5 * np.sin(np.deg2rad(13.8))
+    k1 = np.sqrt(om ** 2 - f ** 2) / 1.456
+    assert abs(cp[28] - k1) < 1e-15 and abs(cp[4] - RN.ring_sigma(0.117, 135e3, k1)) < 1e-12 and cp[13] == om and abs(cp[10] - 0.042 * 7.3e3 * np.sqrt(0.6)) < 1e-9
+    assert cp[16] == 0.0 and cp[19] == 0.0
+    rng = np.random.default_rng(5)
+    X = np.c_[rng.uniform(-6e4, 6e4, (40, 2)), rng.uniform(0, 2e5, 40), rng.normal(size=(40, 2)), np.ones(40)]
+    for i in range(20):
+        x1, x2 = X[i], X[i + 20]
+        dx, dy, tau = x1[0] - x2[0], x1[1] - x2[1], x1[2] - x2[2]
+        cuu, cvv, cuv = RN._ring_div_components_njit(dx, dy, cp[4], cp[5], k1)
+        tw = HN.temporal_wave_njit(tau, cp[6], cp[7], cp[8], cp[9])
+        cu2, cv2, cuv2 = HN._div_components_njit(dx, dy, cp[10], cp[11])
+        t2 = HN.temporal_wave_njit(tau, cp[12], cp[13], cp[14], cp[15])
+        cr, cvr, cuvr = HN._rot_components_njit(dx, dy, cp[0], cp[1]); tr = HN.temporal_matern_njit(tau, cp[2], cp[3])
+        Cuu, Cvv, Cuv = cuu * tw + cu2 * t2 + cr * tr, cvv * tw + cv2 * t2 + cvr * tr, cuv * tw + cuv2 * t2 + cuvr * tr
+        KS = HN._scalar_matern_njit(np.hypot(dx, dy), cp[24], cp[25]) * HN.temporal_matern_njit(tau, cp[26], cp[27])
+        want = x1[3] * x2[3] * Cuu + x1[4] * x2[4] * Cvv + (x1[3] * x2[4] + x1[4] * x2[3]) * Cuv + x1[5] * x2[5] * KS
+        assert abs(K.browsegp_transport_covfunc(x1, x2, cp) - want) < 1e-9 * max(1.0, abs(want))
+    # the ring is not the plain Matern wave (it oscillates with wavelength 2 pi / k1 ~ 67 km)
+    p0 = cp.copy(); p0[28] = 0.0
+    assert abs(K.browsegp_transport_covfunc(X[0], X[1], cp) - K.browsegp_transport_covfunc(X[0], X[1], p0)) > 1e-6 * abs(K.browsegp_transport_covfunc(X[0], X[1], p0))
+    # fit slots: gamma_div with the ring, c1 changes k1, and the blocks partition the cross covariance
+    from inversion_sst_gp.spacetime.fit import params_to_model_args
+    q = dict(h2); q.update(c1=2.0, gamma_div=0.2, ell_div=100e3, gamma_d2=0.1, ell_d2=5e3)
+    cov, _, _ = params_to_model_args(q, cp, pr.slots)
+    k2 = np.sqrt(om ** 2 - f ** 2) / 2.0
+    assert abs(cov[28] - k2) < 1e-15 and abs(cov[4] - RN.ring_sigma(0.2, 100e3, k2)) < 1e-12 and abs(cov[10] - 0.1 * 5e3 * np.sqrt(0.6)) < 1e-9
+    a = np.r_[0.0, 0.0, 5e4, 1.0, 0.0, 0.0]; x = X[3].copy(); x[5] = 1.0
+    parts = [K.browsegp_transport_covfunc(a, x, pr.cov_params_blocks(h2, (b,))) for b in ("rot", "div", "d2")]
+    assert abs(sum(parts) - K.browsegp_transport_covfunc(a, x, cp)) < 1e-12
+    # free names: ell_div / tau_div can be kept fixed; c1 is fitted with the ring
+    pf = P.BrowseGPPrior(vel, blocks=("rot", "div", "d2"), div_kernel="ring", free_vel=True, fixed=("ell_div", "tau_div"))
+    assert "c1" in pf.free and "gamma_d2" in pf.free and "ell_div" not in pf.free and "tau_div" not in pf.free and "gamma_f" not in pf.free
+    try:
+        P.BrowseGPPrior(vel, blocks=("rot", "m4", "d2"))
+        raise AssertionError("m4 and d2 share a slot")
+    except ValueError:
+        pass
+
+
+def test_block_outputs_eddy_is_the_rotational_block_and_blocks_sum_to_the_total():
+    vel = dict(_BG_VEL); vel.update(ell_div=135e3, tau_div=5.46e5, c1=1.456, gamma_d2=0.042, ell_d2=7.3e3, tau_d2=3.39e5)
+    pr = P.BrowseGPPrior(vel, blocks=("rot", "div", "d2"), div_kernel="ring")
+    cube = _fake_cube(nt=12, ny=12, nx=12, seed=3)
+    spec = TL.TileSpec("s", 0, 12, 0, 12, 0, 12, 0, 12, 0, 12, 0, 12)
+    td = TL.extract_tile(cube, spec)
+    hyper = P.Hyper.default(); hyper.stage2["noise"] = 5.0
+    cfg = P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, min_cover=0, prior=pr, block_outputs=True)
+    out = P.run_tile(td, hyper, cfg, tide=None, log=None)
+    for k in ("u_eddy", "v_eddy", "u_m2", "v_m2", "u_m2w", "v_m2w", "u", "v", "var_u"):
+        assert k in out and np.isfinite(out[k]).all(), k
+    assert abs(out["u"] - (out["u_eddy"] + out["u_m2"] + out["u_m2w"])).max() < 1e-9 and abs(out["v"] - (out["v_eddy"] + out["v_m2"] + out["v_m2w"])).max() < 1e-9
+    out0 = P.run_tile(td, hyper, P.PipelineConfig(nnum=30, nnum_pred=40, min_obs=100, min_cover=0, prior=pr), tide=None, log=None)
+    assert "u_m2" not in out0 and abs(out0["u_eddy"] - out["u"]).max() < 1e-9          # without block outputs 'u_eddy' is the total, as before
+    d = tempfile.mkdtemp()
+    P.write_tile(pathlib.Path(d) / "tile_s.nc", td, out)
+    ds = P.merge_tiles((dict(), [spec]), d, cube, None, fields="auto", log=None)
+    assert {"u_eddy", "u_m2", "u_m2w", "u", "T", "u_tide"} <= set(ds.data_vars) and "Tt" not in ds.data_vars
+    assert ds["u_m2"].attrs["units"] == "m s-1"
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ def main():
     hyper = P.Hyper.load(a.hyper)
     tide = RG.ArrayTide(cube) if a.tide_from_cube else (RG.TideModel.load(a.tide) if a.tide else None)
     prior = _util.make_prior(a)
-    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=a.nnum_pred, noise_mode=a.noise_mode, min_obs=a.min_obs, min_cover=a.min_cover, depth_mask=not a.no_depth_mask, tide_mask=a.tide_mask, **({} if prior is None else dict(prior=prior)))
+    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=a.nnum_pred, noise_mode=a.noise_mode, min_obs=a.min_obs, min_cover=a.min_cover, depth_mask=not a.no_depth_mask, block_outputs=(a.prior == 'browsegp' and not a.no_block_outputs), tide_mask=a.tide_mask, **({} if prior is None else dict(prior=prior)))
     _util.log(f"tile {tid}: block {td.shape} ({td.x.size} points), {td.n_obs} observed, tide {'yes' if tide else 'no'}")
     out = P.run_tile(td, hyper, cfg, tide=tide, log=_util.log)
     if out is None:

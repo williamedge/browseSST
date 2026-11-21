@@ -12,7 +12,7 @@ RUN=${BSST_RUN:-/group/oi019/wedge/data/browseSST/run_test_bb23}
 echo "================ submit_test.sh $MODE ================"
 echo "BSST_TEST_FILE : ${BSST_TEST_FILE:-<default: see run_test.py>}"
 echo "BSST_RUN       : $RUN"
-echo "BSST_PRIOR     : ${BSST_PRIOR:-helmholtz (default)}   blocks: ${BSST_BLOCKS:-rot,div,fast}   free velocity: ${BSST_FREE_VEL-rot,div,fast}   (an EMPTY BSST_FREE_VEL keeps browseGP's velocity values fixed)"
+echo "BSST_PRIOR     : ${BSST_PRIOR:-helmholtz (default)}   blocks: ${BSST_BLOCKS:-rot,div,d2}   M2 wave kernel: ${BSST_DIV_KERNEL:-ring}   free velocity: ${BSST_FREE_VEL-rot,div,d2}   kept fixed: ${BSST_FIX_VEL-ell_div,tau_div}   (an EMPTY BSST_FREE_VEL keeps browseGP's velocity values fixed)"
 echo "BSST_MIN_DEPTH : ${BSST_MIN_DEPTH:-100} m (tide fit and tile coverage rule)"
 echo "BSST_FIT_HOURS : ${BSST_FIT_HOURS:-0} (0 = the whole sample tile)   BSST_TIDE_SOURCE: ${BSST_TIDE_SOURCE:-fit}   core/buffer: ${BSST_CORE:-168,28,28} / ${BSST_BUFFER:-12,4,4}"
 if [ -z "${BSST_PRIOR:-}" ] || [ "${BSST_PRIOR}" != "browsegp" ]; then echo "NOTE: BSST_PRIOR is not 'browsegp': the default Helmholtz-Matern prior will be used"; fi

@@ -43,6 +43,7 @@ from browseGP.covariance.helmholtz_numba import (
     temporal_matern_njit,
     temporal_wave_njit,
 )
+from browseGP.covariance.helmholtz_ring_numba import _ring_div_components_njit, ring_sigma, wave_k1
 
 COORD_COLS = np.arange(3)  # x, y, t -- columns used for ordering / neighbour search
 N_PARAMS = 12
@@ -128,69 +129,81 @@ def transport_obs_covfunc_resid(x1, x2, p):
 # ----------------------------------------------------------------------------------------------------------------------------------
 # browseGP's in-situ velocity model as the (u, v) prior of the transport equation (exp 40)
 # ----------------------------------------------------------------------------------------------------------------------------------
-# cov_params layout of `browsegp_transport_covfunc` (28 entries; a block with amplitude 0 is skipped):
+# cov_params layout of `browsegp_transport_covfunc` (29 entries; a block with amplitude 0 is skipped):
 #   [0:4]   rotational Helmholtz block   (sigma_psi, l, tau, nu_t)          Matern-5/2 space x Matern-nu_t time, sigma_psi = gamma l sqrt(3/5)
-#   [4:10]  divergent M2 wave            (sigma_phi, l, tau_d, omega0, gamma_env, nu_t)   Matern-5/2 space x decaying cosine, omega0 = M2
-#   [10:16] divergent M4 wave            (same, omega0 = 2 x M2)
+#   [4:10]  divergent M2 wave            (sigma_phi, l, tau_d, omega0, gamma_env, nu_t)   Matern-5/2 space x decaying cosine, omega0 = M2; with k1 = p[28] > 0 the spatial covariance of the
+#                                        potential is Matern-5/2 x J0(k1 r), browseGP's 'ring' kernel (k1 = sqrt(omega0^2 - f^2) / c1, the mode-1 internal-tide wavenumber)
+#   [10:16] second wave block            (same layout; omega0 = 2 x M2 for the M4 wave, or M2 for browseGP's mode-2 / 'white' M2 block 'd2' (Matern, k = 0, short ell))
 #   [16:19] fast block                   (gamma_f, l, tau)                 independent u / v, Matern-5/2 space x exp(-|t|/tau)
 #   [19:24] inertial block               (gamma_in, l, tau, omega, pol)    circularly polarised decaying oscillation (pol = +1 anticlockwise)
 #   [24:28] S                            (sigma_S, l_S, tau0_S, nu_t_S)
 # These are the covariance tensors of browseGP/scripts/fit_multiscale_real.py (`covfunc_inertial_fast_m4`), with the transport-equation observation z = a u + b v + c S + noise.
-BG_N_PARAMS = 28
+BG_N_PARAMS = 29             # [28] = k1 of the M2 wave block (0 = the plain Matern wave); the optional block weights follow at [29:34]
 
 
 class BrowseSlots(dict):
     """`fit` slot map of `browsegp_transport_covfunc`: name -> index of the lengths / times / S (set directly), plus the velocity AMPLITUDES in browseGP's own units (gamma, m/s), which `post` turns into the
-    covariance vector's entries AFTER the lengths are set (potential sigma = gamma * ell * sqrt(3/5); the fast block's gamma is its entry itself). Freeing gamma instead of sigma removes the sigma-ell ridge
-    (a fixed velocity variance means sigma proportional to ell). A block that was switched off in the starting vector (amplitude 0) stays off whatever the parameter dict holds."""
-    AMP = dict(gamma_rot=(0, 1), gamma_div=(4, 5), gamma_m4=(10, 11), gamma_f=(16, None), gamma_in=(19, None))
+    covariance vector's entries AFTER the lengths are set: potential sigma = gamma / sqrt(5 / (3 ell^2) + k1^2 / 2) (browseGP's `ring_sigma`; k1 = 0 gives gamma ell sqrt(3/5)); the fast and inertial blocks'
+    gamma is the entry itself. Freeing gamma instead of sigma removes the sigma-ell ridge (a fixed velocity variance means sigma proportional to ell). `c1` (mode-1 gravity-wave speed, m/s) sets
+    k1 = sqrt(omega^2 - f^2) / c1 of the M2 wave block when that block is a ring (k1 > 0 in the start vector); `f_rad` is the Coriolis parameter (rad/s). A block that was switched off in the starting vector
+    (amplitude 0) stays off whatever the parameter dict holds."""
+    AMP = dict(gamma_rot=(0, 1), gamma_div=(4, 5), gamma_m4=(10, 11), gamma_d2=(10, 11), gamma_f=(16, None), gamma_in=(19, None))
+
+    def __init__(self, *a, f_rad=3.5e-5, **kw):
+        super().__init__(*a, **kw)
+        self.f_rad = float(f_rad)
 
     def post(self, cov, params, base_cov):
-        s35 = np.sqrt(3.0 / 5.0)
+        if base_cov[28] > 0.0 and "c1" in params:                    # ring M2 wave: the wavenumber follows the (possibly fitted) mode-1 speed
+            cov[28] = wave_k1(cov[7], self.f_rad, params["c1"])
         for name, (i, j) in self.AMP.items():
             if base_cov[i] == 0.0:
                 cov[i] = 0.0
             elif name in params:
-                cov[i] = params[name] * (cov[j] * s35 if j is not None else 1.0)
+                if j is None:
+                    cov[i] = params[name]
+                else:
+                    cov[i] = ring_sigma(params[name], cov[j], cov[28] if i == 4 else 0.0)
         return cov
 
 
-BG_SLOTS = BrowseSlots(ell_rot=1, tau_rot=2, ell_div=5, tau_div=6, ell_m4=11, tau_m4=12, ell_f=17, tau_f=18, ell_in=20, tau_in=21, sigma_S=24, l_S=25, tau0_S=26)
+BG_SLOTS = BrowseSlots(ell_rot=1, tau_rot=2, ell_div=5, tau_div=6, ell_m4=11, tau_m4=12, ell_d2=11, tau_d2=12, ell_f=17, tau_f=18, ell_in=20, tau_in=21, sigma_S=24, l_S=25, tau0_S=26)
 
 
 def pack_browsegp(gamma_rot, ell_rot, tau_rot, gamma_div, ell_div, tau_div, omega_m2, gamma_m4=0.0, ell_m4=1e4, tau_m4=1e5, gamma_f=0.0, ell_f=2e3, tau_f=4.6e3,
-                  gamma_in=0.0, ell_in=2e4, tau_in=2e5, omega_in=0.0, pol=1.0, sigma_S=1.0, l_S=2e4, tau0_S=3600.0, nu_t_rot=1.5, gamma_env=2.0, nu_t_S=1.5):
-    """`cov_params` of `browsegp_transport_covfunc` from browseGP's own parameters (velocity amplitudes gamma in m/s; the potentials' sigma = gamma l sqrt(3/5))."""
-    s35 = np.sqrt(3.0 / 5.0)
-    return np.array([gamma_rot * ell_rot * s35, ell_rot, tau_rot, nu_t_rot,
-                     gamma_div * ell_div * s35, ell_div, tau_div, omega_m2, gamma_env, 0.0,
-                     gamma_m4 * ell_m4 * s35, ell_m4, tau_m4, 2.0 * omega_m2, gamma_env, 0.0,
+                  gamma_in=0.0, ell_in=2e4, tau_in=2e5, omega_in=0.0, pol=1.0, sigma_S=1.0, l_S=2e4, tau0_S=3600.0, nu_t_rot=1.5, gamma_env=2.0, nu_t_S=1.5, k1_div=0.0, omega_second=None):
+    """`cov_params` of `browsegp_transport_covfunc` from browseGP's own parameters (velocity amplitudes gamma in m/s: rms per component; the potentials' sigma = `ring_sigma`, = gamma l sqrt(3/5) at k1 = 0).
+    `k1_div` > 0 makes the M2 wave block browseGP's ring kernel. The second wave block (`gamma_m4`, `ell_m4`, `tau_m4`) has frequency `omega_second` (default 2 x M2: the M4 wave; pass `omega_m2` for the mode-2 M2 block)."""
+    om2 = 2.0 * omega_m2 if omega_second is None else omega_second
+    return np.array([gamma_rot * ell_rot * np.sqrt(3.0 / 5.0), ell_rot, tau_rot, nu_t_rot,
+                     ring_sigma(gamma_div, ell_div, k1_div), ell_div, tau_div, omega_m2, gamma_env, 0.0,
+                     gamma_m4 * ell_m4 * np.sqrt(3.0 / 5.0), ell_m4, tau_m4, om2, gamma_env, 0.0,
                      gamma_f, ell_f, tau_f,
                      gamma_in, ell_in, tau_in, omega_in, pol,
-                     sigma_S, l_S, tau0_S, nu_t_S], dtype=float)
+                     sigma_S, l_S, tau0_S, nu_t_S, k1_div], dtype=float)
 
 
 @njit(cache=True)
 def browsegp_transport_covfunc(x1, x2, p):
-    """Covariance between two `(x, y, t, a, b, c)` rows with the browseGP velocity tensor (rot + M2 wave + M4 wave + fast + inertial) for (u, v) and a Matern space-time S. A 33-entry parameter vector adds
+    """Covariance between two `(x, y, t, a, b, c)` rows with the browseGP velocity tensor (rot + M2 wave + M4 wave + fast + inertial) for (u, v) and a Matern space-time S. A 34-entry parameter vector adds
     block weights (see below) for block-by-block posterior-mean predictions."""
     dx = x1[0] - x2[0]
     dy = x1[1] - x2[1]
     tau = x1[2] - x2[2]
     r = np.hypot(dx, dy)
-    # optional block weights p[28:33] = (rot, M2 wave, M4 wave, fast, inertial), applied ONLY to the covariance between a prediction row (c = 0) and a data row (c = 1): the posterior-mean
+    # optional block weights p[29:34] = (rot, M2 wave, second wave (M4 or mode-2 M2), fast, inertial), applied ONLY to the covariance between a prediction row (c = 0) and a data row (c = 1): the posterior-mean
     # contribution of one block to the predicted velocity (data-data covariances are always the full model)
     w0 = 1.0
     w1 = 1.0
     w2 = 1.0
     w3 = 1.0
     w4 = 1.0
-    if p.size > 28 and ((x1[5] == 0.0) != (x2[5] == 0.0)):
-        w0 = p[28]
-        w1 = p[29]
-        w2 = p[30]
-        w3 = p[31]
-        w4 = p[32]
+    if p.size > 29 and ((x1[5] == 0.0) != (x2[5] == 0.0)):
+        w0 = p[29]
+        w1 = p[30]
+        w2 = p[31]
+        w3 = p[32]
+        w4 = p[33]
     Cuu = 0.0
     Cvv = 0.0
     Cuv = 0.0          # Cov(u(x1), v(x2))
@@ -204,7 +217,10 @@ def browsegp_transport_covfunc(x1, x2, p):
         Cvu += cuv * t
     for k in (4, 10):
         if p[k] > 0.0:
-            cuu, cvv, cuv = _div_components_njit(dx, dy, p[k], p[k + 1])
+            if k == 4:
+                cuu, cvv, cuv = _ring_div_components_njit(dx, dy, p[4], p[5], p[28])          # k1 = 0 reduces exactly to the Matern wave
+            else:
+                cuu, cvv, cuv = _div_components_njit(dx, dy, p[k], p[k + 1])
             t = temporal_wave_njit(tau, p[k + 2], p[k + 3], p[k + 4], p[k + 5]) * (w1 if k == 4 else w2)
             Cuu += cuu * t
             Cvv += cvv * t

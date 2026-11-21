@@ -1,0 +1,16 @@
+{
+ "gamma_rot": 0.0870248,
+ "ell_rot": 32399.4,
+ "tau_rot": 294992.0,
+ "gamma_div": 0.116915,
+ "ell_div": 134931.0,
+ "tau_div": 546273.0,
+ "c1": 1.45643,
+ "gamma_d2": 0.0422773,
+ "ell_d2": 7348.43,
+ "tau_d2": 339390.0,
+ "gamma_f": 0.0737319,
+ "ell_f": 2708.5,
+ "tau_f": 3902.94,
+ "_source": "browseGP results/dense_simple_d2m_iso_v0.08/results.json (MLE, 5548 fit points, loglik 12613.1): rot + M2 ring wave (div_kernel ring, c1 free) + fast + mode-2 / short-scale M2 block d2 (Matern); gamma m/s (rms per component), ell m, tau s, c1 m/s"
+}

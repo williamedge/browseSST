@@ -1,0 +1,36 @@
+{
+ "stage1": {
+  "sigma1": 6.135928789810616,
+  "l1": 178863.74608138236,
+  "tau1": 44492.76104213525,
+  "sigma2": 0.03985084659579318,
+  "l2": 7089.146194426623,
+  "tau2": 4773.860105419626,
+  "noise": 6.801651953954021e-05,
+  "lr:mean": 0.2970731182503287,
+  "lr:diurnal": 0.061606264292071736
+ },
+ "stage2": {
+  "sigma_S": 17.942854867027084,
+  "l_S": 16490.95844688246,
+  "tau0_S": 2831.3782749123825,
+  "lr:diurnal": 27.317352719769026,
+  "noise": 3.45,
+  "gamma_rot": 0.0870248,
+  "ell_rot": 32399.4,
+  "tau_rot": 294992.0,
+  "gamma_div": 0.116915,
+  "ell_div": 134931.0,
+  "tau_div": 546273.0,
+  "c1": 1.45643,
+  "gamma_d2": 0.0422773,
+  "ell_d2": 7348.43,
+  "tau_d2": 339390.0,
+  "gamma_f": 0.0737319,
+  "ell_f": 2708.5,
+  "tau_f": 3902.94
+ },
+ "meta": {
+  "source": "stage 1 and S / diurnal from the pooled fit of the first full 2023 run (run_bg_free_full); noise 3.45 (that fit hit its floor 1.0); velocity = browseGP v0.08 (hpc/browsegp_vel_v008.json)"
+ }
+}

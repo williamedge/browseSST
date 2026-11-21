@@ -1053,6 +1053,41 @@ User: deepen the depth restriction; the M2 divergent kernel is expected to fail 
 0.088 / 0.058); tile output NaN exactly outside the deep pixels. Fraction of the box deeper than 100 / 150 / 200 / 250 (0.46) / 300 / 500 m: 0.70 / 0.57 / 0.51 / ~0.46 / 0.38 / 0.18. Exp 38 earlier found a 180 m tide crop worse than 100 m on
 the BB23 validation: compare the 250 m tide against the moorings before trusting it. Also fixed: numba cache directory per SLURM job (first full run, 2026 cube, lost 24 of 27 tiles to a shared-cache crash).
 
+## First full 2023 HPC run (2026-11-20/21; `run_bg_free_full`: browseGP prior, rot+div+fast velocity parameters FITTED, 250 m depth range)
+
+Chain ran (jobs: tide 20:05, hyper 4 sample tiles t04-t07_01_01 in 0.8-0.9 h each, pool 20:59, 99-task tile array). Tide (stride 2, 250 m): M2 0.117 / 0.117, S2 0.084 / 0.084 m/s (u / v block medians; the stride-6 pilot gave 0.107 / 0.118 and
+0.068 / 0.053, so S2 depends noticeably on the time stride). Tile array: 54 done (median 543 s, max 1073 s, 8.4 CPU-h in total), 27 skipped by the coverage rule, **18 crashed** (all east-column tiles t*_{01,02}_02: 0.2-0.9% of their pixels
+are deeper than 250 m, they pass `min_cover` because those few pixels are observed, then have no usable stage-2 rows -> IndexError in `maximin_order`). Fixed: `run_tile` skips a block with fewer than `min_obs` stage-2 rows (test added);
+no tile output is lost (those blocks have no deep water). The merge job's dependency (afterok on the whole array) never became satisfiable because of the 18 failures; the 54 tiles were merged locally (`run_bg_free_full/merged.nc`).
+Merged product: velocity finite on 82.5% of deep pixel-hours, i.e. all deep pixels from Apr 15 to Jun 17 (cloud gap Apr 1-14: windows 0-1 skipped), none in shallow water.
+Hyper fits: stage 2 not converged on any of the 4 tiles (400-525 evaluations, maxiter), stage 1 converged on 2; **noise at its lower bound 1.0 on all four**. Pooled velocity parameters vs browseGP start: gamma_rot 0.072 -> 0.039 (max/min over tiles 3.9),
+gamma_div 0.120 -> 0.103, ell_div 33 -> 30 km, tau_div 609 -> 584 ks, gamma_f 0.068 -> 0.259 (!), ell_f 2.0 -> 5.3 km, tau_f 4.6 -> 3.2 ks; sigma_S 18, l_S 16 km, tau_S 2.8 ks, lr:diurnal 27 (spread 14x).
+Output: eddy speed median 0.147 m/s (tide 0.131), p99 0.73, p99.9 1.2, max 4.8 m/s; fraction > 1 m/s 0.09% (higher in cloudy neighbourhoods: 0.7% where < 20% of SST observed within 5 px vs 0.13% where > 80%), unrelated to distance from the
+depth-mask edge; posterior sd of u median 0.24 m/s (prior about 0.28 with the fitted gamma_f), so the eddy field is still mostly prior. The fast block (5 km, 53 min, 0.26 m/s) now carries the largest prior variance: it is absorbing
+short-scale dT/dt (S or frontal currents, the same question as exp 41) and is the first suspect for the 'too strong' eddies. Not yet scored against the in-situ data.
+
+### Exp 42 (2026-11-21): block maps at one time step + sparse flag
+`experiments/42_block_maps.py` (arrays `exp42_block_maps.npz`, figure `exp42_block_maps.png` in `~/browsesst_data/real_test/`): the HPC chain recomputed on a 72 h x 36 x 36 block around 2023-05-16 12 UTC with the pooled
+`hyper.json`, stage-2 prediction only at that hour, block-by-block posterior means (sum = total to 1e-15). Speeds over the 706 deep pixels: rotational rms 0.018 / max 0.05 m/s, M2 divergent wave 0.073 / 0.18, fast 0.131 / 0.34,
+total eddy 0.177 / 0.49, tide 0.217 / 0.49; posterior sd of u 0.236. The fast block is pixel-scale speckle (grid-scale, not coherent flow) and dominates the total; the rotational block is ~zero although the SST has a clear cold tongue
+(~0.4 K); the divergent block is smoother. gamma is the per-component velocity sd, so the 'eddy speeds > 0.7 m/s' of the full-run summary are total (rot + div + fast), NOT the rotational block.
+`hpc/merge.py` now writes `obs_frac_local` (valid SST within +-3 h and 5 x 5 px) and `sparse` (< 0.5; `--mask-sparse` NaNs the fields): 15.7% of the finite velocity pixel-hours are flagged and speeds > 1 m/s are 5.5x more frequent
+there (0.83% vs 0.15%). User: the fast block conflates with S / heat flux (it is distinguishable from S only through its dependence on grad T); user found that an extra spatially white M2 kernel (small L) makes the M2 divergent ring
+much easier to pick up, and browseGP now infers div L = 140 km (our SST fit: 30 km from the older start). Next candidates: blocks rot + div + a second M2 wave (reuse the M4 slot with omega = M2), fast dropped, new browseGP start values.
+
+## browseGP v0.08 prior: ring M2 wave + short-scale M2 block, eddy = rotational (2026-11-21)
+
+User: use `browseGP/results/dense_simple_d2m_iso_v0.08`; from now on 'eddies' = the rotational block only. v0.08 (MLE, 5548 points, loglik 12613.1): rot gamma 0.087 / 32 km / 3.4 d; M2 wave with the RING kernel (Matern-5/2 x J0(k1 r), c1 = 1.456 m/s,
+gamma 0.117, ell 135 km, tau 6.3 d); fast (0.074, 2.7 km, 65 min); d2 = a second M2 block with a Matern kernel (k = 0), gamma 0.042, ell 7.3 km, tau 3.9 d (the user's 'spatially white M2 kernel'). Built: `kernels.browsegp_transport_covfunc`
+with k1 at p[28] (block weights now p[29:34]; the second wave slot is the M4 wave or d2 at the M2 frequency), `BrowseSlots` (gamma -> sigma by `ring_sigma`, c1 -> k1), `BrowseGPPrior(blocks incl. 'd2', div_kernel='ring', fixed=...)`,
+per-block tile outputs (`u_eddy` = rot only, `u_m2`, `u_m2w`, ...; sum + tide = u), `merge --fields auto`, CLI / env options, start files `hpc/browsegp_vel_v008.json`, `hyper_browsegp_v008_start.json`. Tests: ring tensor vs browseGP,
+slots, block sum, tile / merge fields.
+Identifiability: ell_div = 135 km and tau_div = 6.3 d exceed the tile (about 150 km, 8 d; 72 h fit window), so they are kept FIXED by default (`--fix-vel ell_div,tau_div`); the ring wavelength (67 km, about two per tile) means c1 and gamma_div are
+identifiable. Vecchia vs dense (N = 5880 = 14 x 14 x 30, random design rows, v0.08 parameters, no S low-rank): log-lik deficit at nnum 30 / 60 / 100 / 200 = -1627 / -951 / -585 / -244 for the ring with ell 135 km, -1547 / -880 / -495 / -206 with
+ell 30 km, -1783 / -1014 / -581 / -221 for the plain Matern wave with ell 135 km: the long range is not special but the absolute error is large for this synthetic design (random-sign design rows screen badly; not representative).
+Local pilot (tile t11_02_01, 36 h hyper crop, 3 iterations, 250 m): 14 params fitted in 609 s / 70 evals (not converged: gamma_rot 0.071, gamma_div 0.095, c1 1.53, gamma_d2 0.036, ell_d2 8.5 km), noise again at its floor 1.0.
+Tile output: eddy rms 0.063 / max 0.38 m/s, M2 ring wave rms 0.108 / max 0.39, d2 0.012 / 0.07, posterior sd of u 0.10 m/s (0.24 with the fast block). Stage-2 prediction is about 3x slower with block outputs (823 s vs 278 s on 47k points).
+
 ## Status at pause (2026-11-03)
 
 Built and tested (tests/ pass): `spacetime/{kernels,synthetic,inference,model,fit,fastop}.py`.

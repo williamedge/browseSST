@@ -140,23 +140,38 @@ class BrowseGPPrior(StructuredSPrior):
     S_FREE = ("sigma_S", "l_S", "tau0_S", "lr:diurnal", "noise")
     free = S_FREE
     bounds = {"lr:diurnal": (1e-3, 1e3), "sigma_S": (1e-2, 1e2), "tau0_S": (1800.0, 3e6), "noise": (1.0, 1e4)}
-    slots = K.BG_SLOTS
-    BLOCK_ORDER = ("rot", "div", "m4", "fast", "inertial")
-    VEL_NAMES = dict(rot=("gamma_rot", "ell_rot", "tau_rot"), div=("gamma_div", "ell_div", "tau_div"), m4=("gamma_m4", "ell_m4", "tau_m4"), fast=("gamma_f", "ell_f", "tau_f"),
-                     inertial=("gamma_in", "ell_in", "tau_in"))
-    VEL_BOUNDS = dict(gamma_rot=(1e-3, 1.0), ell_rot=(5e3, 3e5), tau_rot=(3600.0, 3e6), gamma_div=(1e-3, 1.0), ell_div=(5e3, 3e5), tau_div=(3600.0, 3e6),
-                      gamma_m4=(1e-3, 1.0), ell_m4=(3e3, 1e5), tau_m4=(3600.0, 3e6), gamma_f=(1e-3, 1.0), ell_f=(1e3, 6e4), tau_f=(600.0, 2e5), gamma_in=(1e-3, 1.0), ell_in=(3e3, 1e5),
-                     tau_in=(3600.0, 3e6))
-    VEL_DEFAULTS = dict(ell_m4=1e4, tau_m4=1e5, ell_f=2e3, tau_f=4.6e3, ell_in=2e4, tau_in=2e5)
+    BLOCK_ORDER = ("rot", "div", "m4", "fast", "inertial")           # = the order of the block weights of the covariance vector; 'd2' shares the slot of 'm4'
+    SLOT = dict(rot="rot", div="div", m4="m4", d2="m4", fast="fast", inertial="inertial")
+    # names of the output fields of the blocks (run_tile): the rotational block IS the 'eddy' (user convention, 2026-11-21); the others are the waves / fast flow
+    FIELD = dict(rot="eddy", div="m2", d2="m2w", m4="m4", fast="fast", inertial="inertial")
+    VEL_NAMES = dict(rot=("gamma_rot", "ell_rot", "tau_rot"), div=("gamma_div", "ell_div", "tau_div"), m4=("gamma_m4", "ell_m4", "tau_m4"), d2=("gamma_d2", "ell_d2", "tau_d2"),
+                     fast=("gamma_f", "ell_f", "tau_f"), inertial=("gamma_in", "ell_in", "tau_in"))
+    VEL_BOUNDS = dict(gamma_rot=(1e-3, 1.0), ell_rot=(5e3, 3e5), tau_rot=(3600.0, 3e6), gamma_div=(1e-3, 1.0), ell_div=(5e3, 3e5), tau_div=(3600.0, 3e6), c1=(0.4, 4.0),
+                      gamma_m4=(1e-3, 1.0), ell_m4=(3e3, 1e5), tau_m4=(3600.0, 3e6), gamma_d2=(1e-3, 1.0), ell_d2=(2e3, 2e5), tau_d2=(1e3, 20 * 86400.0),
+                      gamma_f=(1e-3, 1.0), ell_f=(1e3, 6e4), tau_f=(600.0, 2e5), gamma_in=(1e-3, 1.0), ell_in=(3e3, 1e5), tau_in=(3600.0, 3e6))
+    VEL_DEFAULTS = dict(ell_m4=1e4, tau_m4=1e5, ell_d2=7e3, tau_d2=3.4e5, ell_f=2e3, tau_f=4.6e3, ell_in=2e4, tau_in=2e5, c1=1.3)
 
-    def __init__(self, vel, blocks=("rot", "div", "m4", "fast", "inertial"), lat=-14.0, daily=True, n_harm=4, spacing=DAY, free_vel=False, prior_sd_log=None):
+    def __init__(self, vel, blocks=("rot", "div", "m4", "fast", "inertial"), lat=-14.0, daily=True, n_harm=4, spacing=DAY, free_vel=False, prior_sd_log=None, div_kernel="matern", fixed=()):
+        """`blocks`: 'rot', 'div' (the M2 wave), 'm4' (M4 wave) OR 'd2' (browseGP's mode-2 / short-scale M2 block; both use the second wave slot, so not together), 'fast', 'inertial'.
+        `div_kernel='ring'`: the M2 wave block is browseGP's ring kernel (Matern-5/2 x J0(k1 r), k1 = sqrt(omega^2 - f^2) / c1; parameter `c1`, mode-1 speed in m/s). `fixed`: parameter names that stay fixed
+        even when their block is in `free_vel` (e.g. ell_div, tau_div when the correlation length is much larger than the tile)."""
         super().__init__(daily=daily, n_harm=n_harm, spacing=spacing)
         self.vel, self.blocks, self.lat = {**self.VEL_DEFAULTS, **dict(vel)}, tuple(blocks), float(lat)
+        if "m4" in self.blocks and "d2" in self.blocks:
+            raise ValueError("the M4 wave and the mode-2 M2 block (d2) share one slot: use one of them")
+        if div_kernel not in ("matern", "ring"):
+            raise ValueError("div_kernel must be 'matern' or 'ring'")
+        self.div_kernel, self.fixed = div_kernel, tuple(fixed)
+        self.f_rad = 2 * 7.2921159e-5 * abs(np.sin(np.deg2rad(self.lat)))
+        self.slots = K.BrowseSlots(K.BG_SLOTS, f_rad=self.f_rad)
         self.free_vel = tuple(self.blocks) if free_vel is True else (tuple(free_vel) if free_vel else ())
         bad = [b for b in self.free_vel if b not in self.blocks]
         if bad:
             raise ValueError(f"free_vel blocks {bad} are not switched on in blocks={self.blocks}")
-        self.free = self.S_FREE + tuple(n for b in self.BLOCK_ORDER if b in self.free_vel for n in self.VEL_NAMES[b])
+        names = [n for b in ("rot", "div", "m4", "d2", "fast", "inertial") if b in self.free_vel for n in self.VEL_NAMES[b]]
+        if "div" in self.free_vel and self.div_kernel == "ring":
+            names.append("c1")
+        self.free = self.S_FREE + tuple(n for n in names if n not in self.fixed)
         self.bounds = {**BrowseGPPrior.bounds, **{n: self.VEL_BOUNDS[n] for n in self.free if n in self.VEL_BOUNDS}}
         self.prior_sd_log = dict(prior_sd_log or {})
 
@@ -170,10 +185,12 @@ class BrowseGPPrior(StructuredSPrior):
 
     @staticmethod
     def from_results(path, **kw):
-        """From a browseGP `mcmc_results.json` (posterior medians) or a plain `{name: value}` json such as `hpc/browsegp_vel.json` (keys starting with '_' are comments)."""
+        """From a browseGP `mcmc_results.json` (posterior medians), a browseGP MLE `results.json` (`params`), or a plain `{name: value}` json such as `hpc/browsegp_vel.json` (keys starting with '_' are comments)."""
         d = json.loads(pathlib.Path(path).read_text())
         if "posterior_summary" in d:
             vel = {k: float(v["median"]) for k, v in d["posterior_summary"].items()}
+        elif isinstance(d.get("params"), dict):
+            vel = {k: float(v) for k, v in d["params"].items()}
         else:
             vel = {k: float(v) for k, v in d.items() if not k.startswith("_")}
         return BrowseGPPrior(vel, **kw)
@@ -181,19 +198,24 @@ class BrowseGPPrior(StructuredSPrior):
     def cov_params_blocks(self, h2, only):
         """`cov_params` with block weights (1 for the blocks in `only`, 0 for the others) applied to the prediction-data cross covariance: a prediction made with it is the posterior-mean contribution of
         those blocks to the predicted velocity (the data covariance stays the full model), and the contributions of a partition of the blocks sum to the full prediction."""
-        return np.r_[self.cov_params(h2), [1.0 if b in only else 0.0 for b in self.BLOCK_ORDER]]
+        sel = {self.SLOT[b] for b in only}
+        return np.r_[self.cov_params(h2), [1.0 if b in sel else 0.0 for b in self.BLOCK_ORDER]]
 
     def cov_params(self, h2):
         from .tides import omega_of
         on = self.blocks
         v = {**self.vel, **{k: h2[k] for k in self.vel if k in h2}}      # fitted values (Hyper.stage2) override browseGP's medians
-        f_rad = 2 * 7.2921159e-5 * abs(np.sin(np.deg2rad(self.lat)))
         g = lambda key, blk: v[key] if blk in on else 0.0
-        return K.pack_browsegp(g("gamma_rot", "rot"), v["ell_rot"], v["tau_rot"], g("gamma_div", "div"), v["ell_div"], v["tau_div"], omega_of("M2"),
-                               gamma_m4=g("gamma_m4", "m4"), ell_m4=v.get("ell_m4", 1e4), tau_m4=v.get("tau_m4", 1e5),
+        om = omega_of("M2")
+        k1 = float(K.wave_k1(om, self.f_rad, v["c1"])) if self.div_kernel == "ring" else 0.0
+        if "d2" in on:        # mode-2 / short-scale M2 block in the second wave slot, at the M2 frequency
+            second = dict(gamma_m4=v["gamma_d2"], ell_m4=v["ell_d2"], tau_m4=v["tau_d2"], omega_second=om)
+        else:
+            second = dict(gamma_m4=g("gamma_m4", "m4"), ell_m4=v.get("ell_m4", 1e4), tau_m4=v.get("tau_m4", 1e5))
+        return K.pack_browsegp(g("gamma_rot", "rot"), v["ell_rot"], v["tau_rot"], g("gamma_div", "div"), v["ell_div"], v["tau_div"], om, **second,
                                gamma_f=g("gamma_f", "fast"), ell_f=v.get("ell_f", 2e3), tau_f=v.get("tau_f", 4.6e3),
-                               gamma_in=g("gamma_in", "inertial"), ell_in=v.get("ell_in", 2e4), tau_in=v.get("tau_in", 2e5), omega_in=f_rad, pol=1.0,
-                               sigma_S=h2["sigma_S"], l_S=h2["l_S"], tau0_S=h2["tau0_S"])
+                               gamma_in=g("gamma_in", "inertial"), ell_in=v.get("ell_in", 2e4), tau_in=v.get("tau_in", 2e5), omega_in=self.f_rad, pol=1.0,
+                               sigma_S=h2["sigma_S"], l_S=h2["l_S"], tau0_S=h2["tau0_S"], k1_div=k1)
 
 
 @dataclasses.dataclass
@@ -205,11 +227,12 @@ class PipelineConfig:
     order: int = 4                     # finite-difference order of the gradients
     noise_mode: str = "fixed"          # stage-2 noise: 'fixed' (Hyper.stage2['noise']) or 'mle' (scalar maximum likelihood on the tile)
     tide_mask: str = "supported"       # 'supported': tide 0 where the regional fit has no support; 'none': always apply the (extrapolated) tide
-    min_obs: int = 2000                # skip a tile with fewer observed pixels
+    min_obs: int = 2000                # skip a tile with fewer observed pixels, or fewer usable stage-2 rows (after the depth mask and gradient / uncertainty filters)
     depth_mask: bool = False           # True: stage 2 uses only rows at pixels inside the depth range (`td.deep`, i.e. depth >= the `min_depth` given to `extract_tile`), the velocity / S outputs are NaN elsewhere and are only predicted inside it. Stage 1 (latent T) always uses all SST.
     min_cover: float = 0.5             # skip a tile if fewer than this fraction of its pixels inside the depth range (finite cube `depth`) are observed (0 = off)
     tt_sd_factor: float = 3.0          # drop stage-2 rows whose posterior sd of dT/dt exceeds this multiple of the median (large gaps); 0 = keep all
     stage1_maxiter: int = 0            # >0: refit stage 1 on the tile (iterations); the shared values are the start / prior centre
+    block_outputs: bool = False        # priors with blocks (BrowseGPPrior): write the posterior mean of each block (u_eddy = rotational only; u_m2, u_m2w, u_fast, ...) instead of only the total as 'eddy'
     prior: VelocityPrior = dataclasses.field(default_factory=HelmholtzMaternPrior)
 
 
@@ -313,6 +336,10 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     tim["stage1_predict"] = time.time() - t0
     ub, vb, sup = _tide_for_tile(td, tide, cfg)
     idx, Tx, Ty, z = stage2_rows(td, Tm, Ttm, vTt, ub, vb, cfg)
+    if idx.size < cfg.min_obs:                  # e.g. a block with only a few pixels inside the depth range: nothing to infer (the Vecchia ordering fails on an empty row set)
+        if log:
+            log(f"  tile {td.spec.id}: only {idx.size} usable stage-2 rows (< {cfg.min_obs}); skipped")
+        return None
     t0 = time.time()
     h2 = dict(hyper.stage2)
     gp2 = build_stage2(td, idx, Tx, Ty, z, h2, cfg)
@@ -327,6 +354,13 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     u, vu = gp2.predict("u", qx, qy, qt, nn_array=nn2)
     v, vv = gp2.predict("v", qx, qy, qt, nn_array=nn2)
     S, vS = gp2.predict("S", qx, qy, qt, nn_array=nn2)
+    blocks_u = {}
+    if cfg.block_outputs and hasattr(cfg.prior, "cov_params_blocks"):
+        # block-by-block posterior means (browseGP-style prior): the rotational block is the 'eddy', the others are named waves; the total is their sum (u, v above keep the full-model prediction and variance)
+        for b in cfg.prior.blocks:
+            gp2.update(cov_params=cfg.prior.cov_params_blocks(h2, (b,)))
+            blocks_u[cfg.prior.FIELD[b]] = (gp2.predict("u", qx, qy, qt, nn_array=nn2)[0], gp2.predict("v", qx, qy, qt, nn_array=nn2)[0])
+        gp2.update(cov_params=cfg.prior.cov_params(h2))
     tim["stage2_predict"] = time.time() - t0
 
     def full(a):                                                    # back to the whole block, NaN outside the depth range
@@ -338,6 +372,8 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     r = lambda a: np.asarray(a, float).reshape(sh)
     out = dict(T=r(Tm + td.Tref), Tt=r(Ttm), u_eddy=r(u), v_eddy=r(v), var_u=r(vu), var_v=r(vv), S=r(S * ZS * DAY), var_S=r(vS * (ZS * DAY) ** 2),
                u_tide=r(ub), v_tide=r(vb), u=r(u + ub), v=r(v + vb), tide_supported=np.nan_to_num(r(sup)).astype(np.int8))
+    for name, (bu, bv) in blocks_u.items():                         # eddy = the rotational block only; u_m2, u_m2w, u_fast ... the other blocks; u, v stay eddy + waves + tide
+        out["u_" + name], out["v_" + name] = r(full(bu)), r(full(bv))
     out["info"] = dict(tile=td.spec.id, n_grid=int(td.x.size), n_obs=int(td.n_obs), n_stage2=int(idx.size), noise_stage2=float(noise), tide=tide is not None,
                        seconds=time.time() - t_all, timings=tim, stage1_used=h1, mean_coverage=float(td.coverage().mean()))
     if log:
@@ -382,13 +418,16 @@ def fit_hyper(td, hyper, cfg=None, tide=None, maxiter1=25, maxiter2=25, log=prin
 
 
 # ------------------------------------------------------------------------------------------------------------------------------ tile files and merge
-TILE_FIELDS = ("T", "Tt", "u_eddy", "v_eddy", "var_u", "var_v", "S", "var_S", "u_tide", "v_tide", "u", "v", "tide_supported")
+TILE_FIELDS = ("T", "Tt", "u_eddy", "v_eddy", "var_u", "var_v", "S", "var_S", "u_tide", "v_tide", "u", "v", "tide_supported")      # the always-present fields; block outputs (u_m2 ...) are written too when present
 _UNITS = dict(T="K", Tt="K s-1", u_eddy="m s-1", v_eddy="m s-1", var_u="m2 s-2", var_v="m2 s-2", S="K day-1", var_S="K2 day-2", u_tide="m s-1", v_tide="m s-1", u="m s-1", v="m s-1")
 
 
 def write_tile(path, td, out):
     """One NetCDF per tile: the whole buffered block (the merge needs the buffer for the blend), with the tile spec in the attributes."""
-    data = {k: (("time", "lat", "lon"), out[k].astype(np.float32 if k != "tide_supported" else np.int8), {"units": _UNITS.get(k, "1")}) for k in TILE_FIELDS}
+    data = {k: (("time", "lat", "lon"), out[k].astype(np.float32 if k != "tide_supported" else np.int8), {"units": _UNITS.get(k, "1")}) for k in [*TILE_FIELDS, *sorted(k for k in out if k not in TILE_FIELDS and k != "info")]}
+    for k in data:
+        if k[:2] in ("u_", "v_") and k not in _UNITS:
+            data[k][2]["units"] = "m s-1"
     ds = xr.Dataset(data, coords={"time": td.time, "lat": td.lat, "lon": td.lon})
     ds.attrs.update({k: int(v) for k, v in dataclasses.asdict(td.spec).items() if k != "id"}, tile_id=td.spec.id, Tref=float(td.Tref), info=json.dumps(out["info"], default=float))
     enc = {k: dict(zlib=True, complevel=4) for k in ds.data_vars}
@@ -398,8 +437,15 @@ def write_tile(path, td, out):
 
 def merge_tiles(manifest, tiles_dir, cube, out_path, fields=("T", "u", "v", "u_eddy", "v_eddy", "u_tide", "v_tide", "var_u", "var_v", "S"), log=print):
     """Blend the tile files in `tiles_dir` (names tile_<id>.nc) into the cube's grid with the partition-of-unity weights; tiles that are missing (skipped) leave NaN holes where they alone cover.
+    `fields='auto'`: every variable of the first tile file except Tt, var_S and tide_supported (so the block outputs u_m2 ... are blended too).
     Returns the merged Dataset (also written to `out_path` if given)."""
     meta, specs = read_manifest(manifest) if not isinstance(manifest, tuple) else manifest
+    if fields == "auto":
+        first = next((pathlib.Path(tiles_dir) / f"tile_{s.id}.nc" for s in specs if (pathlib.Path(tiles_dir) / f"tile_{s.id}.nc").exists()), None)
+        if first is None:
+            raise FileNotFoundError(f"no tile files in {tiles_dir}")
+        with xr.open_dataset(first) as d:
+            fields = tuple(k for k in d.data_vars if k not in ("Tt", "var_S", "tide_supported"))
     nt, ny, nx = (cube.sizes["time"], cube.sizes["lat"], cube.sizes["lon"])
     bl = Blender((nt, ny, nx), n_fields=len(fields))
     n_used = 0
@@ -413,7 +459,7 @@ def merge_tiles(manifest, tiles_dir, cube, out_path, fields=("T", "u", "v", "u_e
             bl.add(s, *[d[f].values for f in fields])
         n_used += 1
     res = bl.result()
-    ds = xr.Dataset({f: (("time", "lat", "lon"), res[i].astype(np.float32), {"units": _UNITS.get(f, "1")}) for i, f in enumerate(fields)},
+    ds = xr.Dataset({f: (("time", "lat", "lon"), res[i].astype(np.float32), {"units": _UNITS.get(f, "m s-1" if f[:2] in ("u_", "v_") else "1")}) for i, f in enumerate(fields)},
                     coords={"time": cube["time"].values, "lat": cube["lat"].values, "lon": cube["lon"].values})
     ds.attrs.update(n_tiles=n_used, n_tiles_expected=len(specs))
     if out_path:

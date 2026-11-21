@@ -59,3 +59,11 @@ optionally `m4` and `inertial` (`--blocks rot,div,fast` is the default: M4 and i
 - outputs: `u, v, u_eddy, v_eddy, u_tide, v_tide, var_u, var_v, S, var_S` are NaN in shallower water, `tide_supported` is 0; the merge leaves those pixels NaN;
 - coverage rule (`--min-cover`) and the manifest's `cover_deep` / `deep_frac` columns count only pixels inside the range; sample tiles are ranked by them.
 The cube's own `depth` is NaN below 100 m (`make_test_dataset.py --mask-depth`), so thresholds below 100 change nothing.
+
+## browseGP v0.08 prior (default of `--prior browsegp` from 2026-11-21): eddy = rotational, ring M2 wave, short-scale M2 block
+`--blocks rot,div,d2 --div-kernel ring` with `hpc/browsegp_vel_v008.json` (browseGP `results/dense_simple_d2m_iso_v0.08`, MLE): `rot` = the rotational block, i.e. the **eddy**; `div` = the M2 internal-tide wave with browseGP's ring
+kernel (Matern-5/2 x J0(k1 r), k1 = sqrt(omega^2 - f^2) / c1, c1 = 1.456 m/s -> wavelength about 67 km, envelope 135 km, 6.3 d); `d2` = the short-scale (7 km) M2 block; the fast block is dropped (it conflates with S).
+`--free-vel rot,div,d2` fits (gamma, ell, tau) of those blocks and c1 on the sample tiles EXCEPT the names in `--fix-vel` (default `ell_div,tau_div`: the wave's envelope scales exceed the tile (about 150 km, 8 d), so a tile cannot
+identify them). Start values for the hyper fit: `hyper_browsegp_v008_start.json`. Tile outputs with this prior: `u_eddy, v_eddy` = rotational block only; `u_m2` (ring wave), `u_m2w` (d2), `u_fast`/`u_m4`/... if those blocks are on;
+`u, v` = tide + all blocks; `var_u, var_v` = posterior variance of the total eddy + waves; `--no-block-outputs` restores the old behaviour (`u_eddy` = total). Block outputs make stage-2 prediction about 3x slower (one set of
+predictions per block). The merge (`--fields auto`) blends every field present. env file: `env_2023_browsegp.sh` (new run directory `run_v008_ring_d2`; `BSST_BLOCKS`, `BSST_DIV_KERNEL`, `BSST_FIX_VEL`, `BSST_FREE_VEL`).

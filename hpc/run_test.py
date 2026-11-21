@@ -35,8 +35,10 @@ CORE = os.environ.get('BSST_CORE', '168,28,28').split(',')      # tile core: hou
 BUFFER = os.environ.get('BSST_BUFFER', '12,4,4').split(',')     # buffer on the sides that border another tile
 MIN_DEPTH = os.environ.get('BSST_MIN_DEPTH', '100')   # m: the tide fit drops blocks shallower than this, and the tile coverage rule ignores shallower pixels (the test file already has depths < 100 m set to NaN, so values < 100 change nothing)
 PRIOR = os.environ.get('BSST_PRIOR', 'helmholtz')              # 'browsegp': stage-2 velocity prior = browseGP's in-situ model (blocks BSST_BLOCKS), its velocity parameters FITTED on the sample tiles for the blocks in BSST_FREE_VEL
-BLOCKS = os.environ.get('BSST_BLOCKS', 'rot,div,fast')
-FREE_VEL = os.environ.get('BSST_FREE_VEL', 'rot,div,fast')     # '' = keep browseGP's values fixed
+BLOCKS = os.environ.get('BSST_BLOCKS', 'rot,div,d2')            # rot = the 'eddy'; div = M2 ring wave; d2 = short-scale / mode-2 M2 block (browseGP v0.08); fast dropped (conflates with S)
+DIV_KERNEL = os.environ.get('BSST_DIV_KERNEL', 'ring')
+FIX_VEL = os.environ.get('BSST_FIX_VEL', 'ell_div,tau_div')       # kept fixed at browseGP's values: the M2 wave's scales are much larger than a tile
+FREE_VEL = os.environ.get('BSST_FREE_VEL', 'rot,div,d2')     # '' = keep browseGP's values fixed
 FIT_HOURS = os.environ.get('BSST_FIT_HOURS', '0')              # >0: hyper fit on the central N hours of the sample tile (cost is linear in points)
 TIDE_SOURCE = os.environ.get('BSST_TIDE_SOURCE', 'fit')       # 'fit' = regional SST regression (stage `tide`); 'cube' = external u_tide / v_tide variables in the test file (e.g. FES2022); 'none'
 version = f'{STAGE}_pilot' if PILOT else STAGE
@@ -53,8 +55,8 @@ def tide_args():
 def prior_args(fit=False):
     if PRIOR != 'browsegp':
         return []
-    a = ['--prior', 'browsegp', '--blocks', BLOCKS]
-    return a + (['--free-vel', FREE_VEL] if fit and FREE_VEL else [])
+    a = ['--prior', 'browsegp', '--blocks', BLOCKS, '--div-kernel', DIV_KERNEL]
+    return a + (['--free-vel', FREE_VEL, '--fix-vel', FIX_VEL] if fit and FREE_VEL else [])
 
 
 def sample_tiles():
@@ -73,12 +75,12 @@ def commands():
         tiles = sample_tiles()
         idx = ['--array-index', k] if k is not None else ['--tile', tiles.split(',')[0]]
         return py + [str(HPC / 'fit_hyper.py'), '--cube', TEST_FILE, '--manifest', str(RUN / 'manifest.json'), '--tiles', tiles, *idx, *tide_args(),
-                     '--hyper-in', str(HPC / ('hyper_browsegp_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')), '--out-dir', str(RUN / 'hyper'), '--maxiter1', it, '--maxiter2', it, '--noise-mode', 'mle',
+                     '--hyper-in', str(HPC / ('hyper_browsegp_v008_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')), '--out-dir', str(RUN / 'hyper'), '--maxiter1', it, '--maxiter2', it, '--noise-mode', 'mle',
                      '--fit-hours', FIT_HOURS, '--min-depth', MIN_DEPTH, *prior_args(fit=True)]
     if STAGE == 'pool':
         return py + [str(HPC / 'pool_hyper.py'), '--inputs', *sorted(glob.glob(str(RUN / 'hyper' / 'hyper_*.json'))), '--out', str(RUN / 'hyper.json')]
     if STAGE == 'tiles':
-        hyper = RUN / 'hyper.json' if (RUN / 'hyper.json').exists() else HPC / ('hyper_browsegp_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')
+        hyper = RUN / 'hyper.json' if (RUN / 'hyper.json').exists() else HPC / ('hyper_browsegp_v008_start.json' if PRIOR == 'browsegp' else 'hyper_real_start.json')
         sel = ['--tile', sample_tiles().split(',')[0]] if (PILOT or k is None) else ['--array-index', k]
         return py + [str(HPC / 'run_tile.py'), '--cube', TEST_FILE, '--manifest', str(RUN / 'manifest.json'), '--hyper', str(hyper), *tide_args(),
                      '--out-dir', str(RUN / ('tiles_pilot' if PILOT else 'tiles')), *sel, '--min-depth', MIN_DEPTH, *prior_args()]
