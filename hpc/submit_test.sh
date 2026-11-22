@@ -1,6 +1,7 @@
 #!/bin/bash
 # Chain the real-data test on the HPC:  manifest -> tide -> hyper (array) -> pool -> tiles (array) -> merge.
 #   bash submit_test.sh pilot   : manifest, then ONE pilot tile (and a pilot tide fit); read the time / memory with `sacct -j <jobid> --format=JobID,Elapsed,MaxRSS,State`
+#   bash submit_test.sh from-hyper : skip the tide job and start at the hyper stage; needs $BSST_RUN/tide/ already in place (copy it from an earlier run with the same depth threshold and tide settings). For a run that only changes the stage-2 velocity prior.
 #   bash submit_test.sh         : the full chain (run the pilot first and size --mem / --time in the sbat_test_*.sbatch files from it)
 # Paths: the same constants as run_test.py (edit there or set BSST_ROOT / BSST_TEST_FILE / BSST_RUN).
 source activate /group/oi019/wedge/env/drift
@@ -28,8 +29,14 @@ if [ "$MODE" = "pilot" ]; then
   echo "pilot submitted: tide $J1, tile $J2   ->   sacct -j $J2 --format=JobID,Elapsed,MaxRSS,State"
   exit 0
 fi
-J1=$(sbatch --parsable sbat_test_tide.sbatch)
-J2=$(sbatch --parsable --dependency=afterok:$J1 --array=0-$((NSAMP-1)) sbat_test_hyper.sbatch)
+if [ "$MODE" = "from-hyper" ]; then
+  [ -f "$RUN/tide/tide_model.pkl" ] || { echo "ERROR: $RUN/tide/tide_model.pkl not found: copy the tide/ directory of an earlier run into $RUN first"; exit 1; }
+  J1=none
+  J2=$(sbatch --parsable --array=0-$((NSAMP-1)) sbat_test_hyper.sbatch)
+else
+  J1=$(sbatch --parsable sbat_test_tide.sbatch)
+  J2=$(sbatch --parsable --dependency=afterok:$J1 --array=0-$((NSAMP-1)) sbat_test_hyper.sbatch)
+fi
 J3=$(sbatch --parsable --dependency=afterok:$J2 sbat_test_pool.sbatch)
 J4=$(sbatch --parsable --dependency=afterok:$J3 --array=0-$((NTILES-1))%8 sbat_test_tiles.sbatch)
 J5=$(sbatch --parsable --dependency=afterok:$J4 sbat_test_merge.sbatch)
