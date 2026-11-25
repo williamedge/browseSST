@@ -149,18 +149,20 @@ class BrowseGPPrior(StructuredSPrior):
     VEL_BOUNDS = dict(gamma_rot=(1e-3, 1.0), ell_rot=(5e3, 3e5), tau_rot=(3600.0, 3e6), gamma_div=(1e-3, 1.0), ell_div=(5e3, 3e5), tau_div=(3600.0, 3e6), c1=(0.4, 4.0),
                       gamma_m4=(1e-3, 1.0), ell_m4=(3e3, 1e5), tau_m4=(3600.0, 3e6), gamma_d2=(1e-3, 1.0), ell_d2=(2e3, 2e5), tau_d2=(1e3, 20 * 86400.0),
                       gamma_f=(1e-3, 1.0), ell_f=(1e3, 6e4), tau_f=(600.0, 2e5), gamma_in=(1e-3, 1.0), ell_in=(3e3, 1e5), tau_in=(3600.0, 3e6))
-    VEL_DEFAULTS = dict(ell_m4=1e4, tau_m4=1e5, ell_d2=7e3, tau_d2=3.4e5, ell_f=2e3, tau_f=4.6e3, ell_in=2e4, tau_in=2e5, c1=1.3)
+    VEL_DEFAULTS = dict(ell_m4=1e4, tau_m4=1e5, ell_d2=7e3, tau_d2=3.4e5, ell_f=2e3, tau_f=4.6e3, ell_in=2e4, tau_in=2e5, c1=1.3, aniso_div=1.0, theta_div=0.0)
 
     def __init__(self, vel, blocks=("rot", "div", "m4", "fast", "inertial"), lat=-14.0, daily=True, n_harm=4, spacing=DAY, free_vel=False, prior_sd_log=None, div_kernel="matern", fixed=()):
         """`blocks`: 'rot', 'div' (the M2 wave), 'm4' (M4 wave) OR 'd2' (browseGP's mode-2 / short-scale M2 block; both use the second wave slot, so not together), 'fast', 'inertial'.
-        `div_kernel='ring'`: the M2 wave block is browseGP's ring kernel (Matern-5/2 x J0(k1 r), k1 = sqrt(omega^2 - f^2) / c1; parameter `c1`, mode-1 speed in m/s). `fixed`: parameter names that stay fixed
+        `div_kernel='ring'`: the M2 wave block is browseGP's ring kernel (Matern-5/2 x J0(k1 r), k1 = sqrt(omega^2 - f^2) / c1; parameter `c1`, mode-1 speed in m/s). `'ring_aniso'`: browseGP's anisotropic ring: `ell_div` is
+        the length ACROSS the crests, `aniso_div` (s >= 1, kept fixed) the stretch along them (length s ell_div, wavelength s 2 pi / k1) and `theta_div` (rad, ccw from east) the crest direction; e.g. L_x = 60 km, L_y = 180 km is
+        ell_div = 60e3, aniso_div = 3, theta_div = pi / 2 (crests along y, wave travelling east-west). `fixed`: parameter names that stay fixed
         even when their block is in `free_vel` (e.g. ell_div, tau_div when the correlation length is much larger than the tile)."""
         super().__init__(daily=daily, n_harm=n_harm, spacing=spacing)
         self.vel, self.blocks, self.lat = {**self.VEL_DEFAULTS, **dict(vel)}, tuple(blocks), float(lat)
         if "m4" in self.blocks and "d2" in self.blocks:
             raise ValueError("the M4 wave and the mode-2 M2 block (d2) share one slot: use one of them")
-        if div_kernel not in ("matern", "ring"):
-            raise ValueError("div_kernel must be 'matern' or 'ring'")
+        if div_kernel not in ("matern", "ring", "ring_aniso"):
+            raise ValueError("div_kernel must be 'matern', 'ring' or 'ring_aniso'")
         self.div_kernel, self.fixed = div_kernel, tuple(fixed)
         self.f_rad = 2 * 7.2921159e-5 * abs(np.sin(np.deg2rad(self.lat)))
         self.slots = K.BrowseSlots(K.BG_SLOTS, f_rad=self.f_rad)
@@ -169,7 +171,7 @@ class BrowseGPPrior(StructuredSPrior):
         if bad:
             raise ValueError(f"free_vel blocks {bad} are not switched on in blocks={self.blocks}")
         names = [n for b in ("rot", "div", "m4", "d2", "fast", "inertial") if b in self.free_vel for n in self.VEL_NAMES[b]]
-        if "div" in self.free_vel and self.div_kernel == "ring":
+        if "div" in self.free_vel and self.div_kernel in ("ring", "ring_aniso"):
             names.append("c1")
         self.free = self.S_FREE + tuple(n for n in names if n not in self.fixed)
         self.bounds = {**BrowseGPPrior.bounds, **{n: self.VEL_BOUNDS[n] for n in self.free if n in self.VEL_BOUNDS}}
@@ -199,7 +201,12 @@ class BrowseGPPrior(StructuredSPrior):
         """`cov_params` with block weights (1 for the blocks in `only`, 0 for the others) applied to the prediction-data cross covariance: a prediction made with it is the posterior-mean contribution of
         those blocks to the predicted velocity (the data covariance stays the full model), and the contributions of a partition of the blocks sum to the full prediction."""
         sel = {self.SLOT[b] for b in only}
-        return np.r_[self.cov_params(h2), [1.0 if b in sel else 0.0 for b in self.BLOCK_ORDER]]
+        w = [1.0 if b in sel else 0.0 for b in self.BLOCK_ORDER]
+        cp = self.cov_params(h2)
+        if cp.size > 34:                              # anisotropic ring: the vector already carries the weights (and s, theta after them)
+            cp[29:34] = w
+            return cp
+        return np.r_[cp, w]
 
     def cov_params(self, h2):
         from .tides import omega_of
@@ -207,7 +214,8 @@ class BrowseGPPrior(StructuredSPrior):
         v = {**self.vel, **{k: h2[k] for k in self.vel if k in h2}}      # fitted values (Hyper.stage2) override browseGP's medians
         g = lambda key, blk: v[key] if blk in on else 0.0
         om = omega_of("M2")
-        k1 = float(K.wave_k1(om, self.f_rad, v["c1"])) if self.div_kernel == "ring" else 0.0
+        k1 = float(K.wave_k1(om, self.f_rad, v["c1"])) if self.div_kernel in ("ring", "ring_aniso") else 0.0
+        aniso = (v["aniso_div"], v["theta_div"]) if self.div_kernel == "ring_aniso" else None
         if "d2" in on:        # mode-2 / short-scale M2 block in the second wave slot, at the M2 frequency
             second = dict(gamma_m4=v["gamma_d2"], ell_m4=v["ell_d2"], tau_m4=v["tau_d2"], omega_second=om)
         else:
@@ -215,7 +223,7 @@ class BrowseGPPrior(StructuredSPrior):
         return K.pack_browsegp(g("gamma_rot", "rot"), v["ell_rot"], v["tau_rot"], g("gamma_div", "div"), v["ell_div"], v["tau_div"], om, **second,
                                gamma_f=g("gamma_f", "fast"), ell_f=v.get("ell_f", 2e3), tau_f=v.get("tau_f", 4.6e3),
                                gamma_in=g("gamma_in", "inertial"), ell_in=v.get("ell_in", 2e4), tau_in=v.get("tau_in", 2e5), omega_in=self.f_rad, pol=1.0,
-                               sigma_S=h2["sigma_S"], l_S=h2["l_S"], tau0_S=h2["tau0_S"], k1_div=k1)
+                               sigma_S=h2["sigma_S"], l_S=h2["l_S"], tau0_S=h2["tau0_S"], k1_div=k1, aniso_div=aniso)
 
 
 @dataclasses.dataclass
@@ -231,6 +239,10 @@ class PipelineConfig:
     depth_mask: bool = False           # True: stage 2 uses only rows at pixels inside the depth range (`td.deep`, i.e. depth >= the `min_depth` given to `extract_tile`), the velocity / S outputs are NaN elsewhere and are only predicted inside it. Stage 1 (latent T) always uses all SST.
     min_cover: float = 0.5             # skip a tile if fewer than this fraction of its pixels inside the depth range (finite cube `depth`) are observed (0 = off)
     tt_sd_factor: float = 3.0          # drop stage-2 rows whose posterior sd of dT/dt exceeds this multiple of the median (large gaps); 0 = keep all
+    row_mask: str = "all"              # which stage-2 rows are kept relative to the clouds: 'all' (every grid point with usable latent-T products, gaps included), 'observed' (SST observed at the row's pixel and hour),
+                                       # 'stencil' (observed at the pixel at t-1, t, t+1 AND over the +-order/2 pixel cross of the spatial difference: a cloud-margin mask). Stage 1 always uses all SST.
+    predict_at: str = "all"            # where the outputs are predicted: 'all' (every grid point inside the depth range, gaps included) or 'rows' (in-sample only: exactly the stage-2 rows; EVERY output, T and the tide
+                                       # included, is NaN elsewhere). With 'rows' use row_mask='stencil' or 'observed', otherwise the rows themselves include gap points.
     stage1_maxiter: int = 0            # >0: refit stage 1 on the tile (iterations); the shared values are the start / prior centre
     block_outputs: bool = False        # priors with blocks (BrowseGPPrior): write the posterior mean of each block (u_eddy = rotational only; u_m2, u_m2w, u_fast, ...) instead of only the total as 'eddy'
     prior: VelocityPrior = dataclasses.field(default_factory=HelmholtzMaternPrior)
@@ -269,6 +281,30 @@ def deep_points(td, cfg):
     return np.ones(td.x.size, bool)
 
 
+def cloud_row_mask(td, mode, order=4):
+    """Flat bool over the block's grid points: where stage-2 rows are allowed by `PipelineConfig.row_mask`. 'stencil' needs real SST at every point a finite difference of the observations would use."""
+    if mode == "all":
+        return np.ones(td.x.size, bool)
+    o = td.obs.reshape(td.shape)
+    if mode == "observed":
+        return o.ravel().copy()
+    if mode != "stencil":
+        raise ValueError(f"row_mask must be 'all', 'observed' or 'stencil', not {mode!r}")
+    h = order // 2
+    p = np.pad(o, ((1, 1), (h, h), (h, h)), constant_values=False)
+    nt, ny, nx = td.shape
+    cut = lambda dk, dj, di: p[1 + dk:1 + dk + nt, h + dj:h + dj + ny, h + di:h + di + nx]
+    ok = o & cut(-1, 0, 0) & cut(1, 0, 0)
+    for d in range(1, h + 1):
+        ok &= cut(0, d, 0) & cut(0, -d, 0) & cut(0, 0, d) & cut(0, 0, -d)
+    return ok.ravel()
+
+
+def candidate_rows(td, cfg):
+    """Number of grid points that can become stage-2 rows, from the masks alone (no GP): an upper bound on `stage2_rows` (which also drops block borders and large dT/dt sd), used to skip a tile early."""
+    return int((cloud_row_mask(td, cfg.row_mask, cfg.order) & deep_points(td, cfg)).sum())
+
+
 def stage2_rows(td, Tm, Ttm, vTt, ub, vb, cfg):
     """z and the design rows (-Tx, -Ty, 1) at the grid points that carry usable products. Returns (idx, Tx, Ty, z) with Tx, Ty, z full length."""
     Tx, Ty = td.gradients(Tm, cfg.order)
@@ -279,6 +315,7 @@ def stage2_rows(td, Tm, Ttm, vTt, ub, vb, cfg):
         sd = np.sqrt(np.maximum(vTt, 0.0))
         ref = np.median(sd[ok & td.obs]) if (ok & td.obs).any() else np.median(sd[ok])
         ok &= sd <= cfg.tt_sd_factor * ref
+    ok &= cloud_row_mask(td, cfg.row_mask, cfg.order)                # after the sd filter, so its reference median does not depend on the mask
     return np.flatnonzero(ok), Tx, Ty, z
 
 
@@ -314,6 +351,8 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     Fields: T (latent SST, K, absolute), Tt (K/s), u_eddy, v_eddy (m/s), var_u, var_v (stage-2 block variance), S (K/day), var_S, u_tide, v_tide, u, v (= eddy + tide), tide_supported.
     """
     cfg = PipelineConfig() if cfg is None else cfg
+    if cfg.predict_at not in ("all", "rows"):
+        raise ValueError(f"predict_at must be 'all' or 'rows', not {cfg.predict_at!r}")
     t_all = time.time(); tim = {}
     if td.n_obs < cfg.min_obs:
         if log:
@@ -322,6 +361,11 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     if cfg.min_cover > 0 and td.cover_deep() < cfg.min_cover:
         if log:
             log(f"  tile {td.spec.id}: only {td.cover_deep():.2f} of its pixels in the depth range are observed (< {cfg.min_cover}); skipped")
+        return None
+    n_cand = candidate_rows(td, cfg)
+    if n_cand < cfg.min_obs:
+        if log:
+            log(f"  tile {td.spec.id}: only {n_cand} candidate stage-2 rows after the depth and cloud ({cfg.row_mask}) masks (< {cfg.min_obs}); skipped")
         return None
     sh = td.shape
     xo, yo, to, To = td.observed()
@@ -346,8 +390,11 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
     noise = h2["noise"]
     if cfg.noise_mode == "mle":
         noise = fit_noise_mle(gp2)
-    dp = deep_points(td, cfg)
-    qx, qy, qt = td.x[dp], td.y[dp], td.t[dp]                       # prediction points: the whole block, or only its deep part with the depth mask
+    if cfg.predict_at == "rows":
+        dp = np.zeros(td.x.size, bool); dp[idx] = True
+    else:
+        dp = deep_points(td, cfg)
+    qx, qy, qt = td.x[dp], td.y[dp], td.t[dp]                       # prediction points: the whole block, only its deep part with the depth mask, or only the data (predict_at='rows')
     nn2 = gp2.pred_neighbours(qx, qy, qt, cfg.nnum_pred)
     tim["stage2_build"] = time.time() - t0
     t0 = time.time()
@@ -363,18 +410,20 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
         gp2.update(cov_params=cfg.prior.cov_params(h2))
     tim["stage2_predict"] = time.time() - t0
 
-    def full(a):                                                    # back to the whole block, NaN outside the depth range
+    def full(a):                                                    # back to the whole block, NaN outside the prediction points
         o = np.full(td.x.size, np.nan)
         o[dp] = a
         return o
     u, vu, v, vv, S, vS = (full(a) for a in (u, vu, v, vv, S, vS))
     ub, vb, sup = (np.where(dp, a, np.nan) for a in (ub, vb, sup.astype(float)))
     r = lambda a: np.asarray(a, float).reshape(sh)
+    if cfg.predict_at == "rows":                                    # in-sample only: the latent-T products too
+        Tm, Ttm = np.where(dp, Tm, np.nan), np.where(dp, Ttm, np.nan)
     out = dict(T=r(Tm + td.Tref), Tt=r(Ttm), u_eddy=r(u), v_eddy=r(v), var_u=r(vu), var_v=r(vv), S=r(S * ZS * DAY), var_S=r(vS * (ZS * DAY) ** 2),
                u_tide=r(ub), v_tide=r(vb), u=r(u + ub), v=r(v + vb), tide_supported=np.nan_to_num(r(sup)).astype(np.int8))
     for name, (bu, bv) in blocks_u.items():                         # eddy = the rotational block only; u_m2, u_m2w, u_fast ... the other blocks; u, v stay eddy + waves + tide
         out["u_" + name], out["v_" + name] = r(full(bu)), r(full(bv))
-    out["info"] = dict(tile=td.spec.id, n_grid=int(td.x.size), n_obs=int(td.n_obs), n_stage2=int(idx.size), noise_stage2=float(noise), tide=tide is not None,
+    out["info"] = dict(row_mask=cfg.row_mask, predict_at=cfg.predict_at, n_pred=int(dp.sum()), tile=td.spec.id, n_grid=int(td.x.size), n_obs=int(td.n_obs), n_stage2=int(idx.size), noise_stage2=float(noise), tide=tide is not None,
                        seconds=time.time() - t_all, timings=tim, stage1_used=h1, mean_coverage=float(td.coverage().mean()))
     if log:
         log(f"  tile {td.spec.id}: {td.n_obs} obs of {td.x.size} grid points, {idx.size} stage-2 rows, noise {noise:.2f}, {out['info']['seconds']:.0f}s " + ", ".join(f"{k} {v_:.0f}s" for k, v_ in tim.items()))
@@ -384,8 +433,13 @@ def run_tile(td, hyper, cfg=None, tide=None, log=print):
 # ------------------------------------------------------------------------------------------------------------------------------ hyperparameter fit on a sample tile
 def fit_hyper(td, hyper, cfg=None, tide=None, maxiter1=25, maxiter2=25, log=print):
     """Estimate the shared hyperparameters on one tile: stage 1 by the T-GP likelihood from `hyper.stage1`, then the stage-2 parameters (`cfg.prior.free`) by the Vecchia likelihood of the
-    tide-removed response from `hyper.stage2` (the noise is fixed at its value, or fitted by ML first if `cfg.noise_mode == 'mle'`). Returns a new `Hyper` (log of the optimisation in meta)."""
+    tide-removed response from `hyper.stage2` (the noise is fixed at its value, or fitted by ML first if `cfg.noise_mode == 'mle'`). Returns a new `Hyper` (log of the optimisation in meta). Returns None, without fitting, if the tile has fewer than `cfg.min_obs` observed pixels or stage-2 rows."""
     cfg = PipelineConfig() if cfg is None else cfg
+    n_cand = candidate_rows(td, cfg)
+    if td.n_obs < cfg.min_obs or n_cand < cfg.min_obs:
+        if log:
+            log(f"  tile {td.spec.id}: {td.n_obs} observed pixels, {n_cand} candidate stage-2 rows after the depth and cloud ({cfg.row_mask}) masks (need {cfg.min_obs} of each); no fit")
+        return None
     xo, yo, to, To = td.observed()
     t0 = time.time()
     gp1 = build_stage1(xo, yo, to, To, hyper.stage1, cfg)
@@ -396,6 +450,10 @@ def fit_hyper(td, hyper, cfg=None, tide=None, maxiter1=25, maxiter2=25, log=prin
     Tm, Ttm, vTt = stage1_products(td, gp1, cfg)
     ub, vb, _ = _tide_for_tile(td, tide, cfg)
     idx, Tx, Ty, z = stage2_rows(td, Tm, Ttm, vTt, ub, vb, cfg)
+    if idx.size < cfg.min_obs:
+        if log:
+            log(f"  tile {td.spec.id}: only {idx.size} usable stage-2 rows (< {cfg.min_obs}); no fit")
+        return None
     h2 = dict(hyper.stage2)
     if hasattr(cfg.prior, "complete"):
         h2 = cfg.prior.complete(h2)            # priors with fitted velocity parameters start them from their own defaults (browseGP's medians)

@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--fit-hours", type=int, default=0, help="fit on the central N hours of the tile only (cost is linear in the number of points; 0 = the whole buffered tile)")
     ap.add_argument("--min-depth", type=float, default=0.0, help="m; stage 2 uses only pixels at least this deep (with the cube's own depth mask)"); ap.add_argument("--no-depth-mask", action="store_true")
     _util.add_prior_args(ap)
+    _util.add_data_args(ap)
     a = ap.parse_args()
     _util.set_threads()
     import xarray as xr
@@ -39,9 +40,11 @@ def main():
     tide = RG.ArrayTide(cube) if a.tide_from_cube else (RG.TideModel.load(a.tide) if a.tide else None)
     h0 = P.Hyper.load(a.hyper_in) if a.hyper_in else P.Hyper.default()
     prior = _util.make_prior(a)
-    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=2 * a.nnum, noise_mode=a.noise_mode, depth_mask=not a.no_depth_mask, **({} if prior is None else dict(prior=prior)))
+    cfg = P.PipelineConfig(nnum=a.nnum, nnum_pred=2 * a.nnum, noise_mode=a.noise_mode, row_mask=a.row_mask, min_obs=a.min_obs, depth_mask=not a.no_depth_mask, **({} if prior is None else dict(prior=prior)))
     _util.log(f"tile {tid}: {td.shape}, {td.n_obs} observed of {td.x.size}; tide {'yes' if tide else 'no'}")
     h = P.fit_hyper(td, h0, cfg, tide=tide, maxiter1=a.maxiter1, maxiter2=a.maxiter2, log=_util.log)
+    if h is None:                                      # too little data: no file, exit 0 so that the dependent jobs still run (pool_hyper.py uses the fits that exist)
+        return
     out = pathlib.Path(a.out_dir); out.mkdir(parents=True, exist_ok=True)
     h.save(out / f"hyper_{tid}.json")
     _util.log(f"wrote {out / f'hyper_{tid}.json'}")

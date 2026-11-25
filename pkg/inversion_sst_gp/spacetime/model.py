@@ -29,6 +29,7 @@ from . import inference as I
 from . import kernels as K
 
 DAY = 86400.0
+NN_BATCH = 10_000      # prediction-neighbour queries searched at a time (memory only; the neighbours do not depend on it)
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +131,9 @@ class SpaceTimeGP:
         Lx, Lt = self.op.search_scales
         xyz = np.column_stack([np.asarray(v, float).ravel() for v in (x, y, t)])
         m = self.op.nnum if nnum_pred is None else nnum_pred
-        return get_pred_nn(I.search_coords(xyz, Lx, Lt), I.search_coords(self.op.Xo, Lx, Lt), m=m, method=method)
+        q, ref = I.search_coords(xyz, Lx, Lt), I.search_coords(self.op.Xo, Lx, Lt)
+        # in batches: the queries are independent, and the tie-robust search holds several (n_query, >= 2 m) arrays at once (more than 1 GB for a whole tile)
+        return np.concatenate([get_pred_nn(q[i:i + NN_BATCH], ref, m=m, method=method) for i in range(0, len(q), NN_BATCH)])
 
     def predict(self, field, x, y, t, nnum_pred=None, method='sklearn', z=None, nn_array=None):
         """Posterior mean and (Vecchia-block) variance of the named field ('u', 'v', 'S'; S in scaled units).

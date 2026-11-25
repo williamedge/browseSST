@@ -67,3 +67,14 @@ kernel (Matern-5/2 x J0(k1 r), k1 = sqrt(omega^2 - f^2) / c1, c1 = 1.456 m/s -> 
 identify them). Start values for the hyper fit: `hyper_browsegp_v008_start.json`. Tile outputs with this prior: `u_eddy, v_eddy` = rotational block only; `u_m2` (ring wave), `u_m2w` (d2), `u_fast`/`u_m4`/... if those blocks are on;
 `u, v` = tide + all blocks; `var_u, var_v` = posterior variance of the total eddy + waves; `--no-block-outputs` restores the old behaviour (`u_eddy` = total). Block outputs make stage-2 prediction about 3x slower (one set of
 predictions per block). The merge (`--fields auto`) blends every field present. env file: `env_2023_browsegp.sh` (new run directory `run_v008_ring_d2`; `BSST_BLOCKS`, `BSST_DIV_KERNEL`, `BSST_FIX_VEL`, `BSST_FREE_VEL`).
+
+## Cloud-margin mask and in-sample predictions (exp 50)
+
+| option (`run_test.py` variable) | values | effect |
+|---|---|---|
+| `--row-mask` (`BSST_ROW_MASK`) | `all` (default), `observed`, `stencil` | which grid points become stage-2 rows, in BOTH `fit_hyper.py` and `run_tile.py`. `stencil`: SST at t-1, t, t+1 and over the +-2 px cross of the gradient. Stage 1 always uses all SST. |
+| `--predict-at` (`BSST_PREDICT_AT`) | `all` (default), `rows` | `run_tile.py` only. `rows`: in-sample, every output (T, Tt, tide, velocity, S, variances) is NaN except at the stage-2 rows. |
+| `--min-obs` (`BSST_MIN_ROWS`) | 2000 | a tile with fewer observed pixels or stage-2 rows writes no file and exits 0; a sample tile writes no hyper file and exits 0 (`pool_hyper.py` uses the fits that exist). |
+
+Run: `source env_2023_browsegp_control_stencil.sh`, then `mkdir -p $BSST_RUN && cp -r <control run>/tide $BSST_RUN/` and `bash submit_test.sh from-hyper`.
+`obs_frac_local` / `sparse` in the merged file come from the cube and are defined everywhere; every other field is NaN where no tile predicted.

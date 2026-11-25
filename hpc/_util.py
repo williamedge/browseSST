@@ -46,12 +46,18 @@ def add_prior_args(ap):
     ap.add_argument("--prior", default="helmholtz", choices=("helmholtz", "browsegp"), help="stage-2 velocity covariance: the Matern Helmholtz default, or browseGP's in-situ model")
     ap.add_argument("--vel-json", help="browsegp: browseGP velocity parameters (results.json / mcmc_results.json or a plain {name: value} json); default hpc/browsegp_vel_v008.json (v0.08)")
     ap.add_argument("--blocks", default="rot,div,d2", help="browsegp: velocity blocks that are on: rot (= the 'eddy'), div (M2 wave), d2 (short-scale / mode-2 M2 block), m4 (instead of d2), fast, inertial")
-    ap.add_argument("--div-kernel", default="ring", choices=("ring", "matern"), help="browsegp: spatial kernel of the M2 wave block: browseGP's ring (Matern x J0(k1 r), parameter c1) or the plain Matern wave")
+    ap.add_argument("--div-kernel", default="ring", choices=("ring", "matern", "ring_aniso"), help="browsegp: spatial kernel of the M2 wave block: browseGP's ring (Matern x J0(k1 r), parameter c1), the anisotropic ring (ring_aniso: ell_div across the crests, aniso_div stretch along them, theta_div crest direction, from --vel-json) or the plain Matern wave")
     ap.add_argument("--free-vel", default="", help="browsegp, fit_hyper only: blocks whose (gamma, ell, tau) [+ c1 for a ring] are FITTED on the sample tile ('all' = every block that is on); default none = fixed at browseGP's values")
     ap.add_argument("--fix-vel", default="ell_div,tau_div", help="browsegp, fit_hyper only: parameter names kept fixed even in a free block (default: the M2 wave's length and time scale, which are much larger than a tile and not identifiable on it)")
     ap.add_argument("--vel-prior-sd", type=float, default=1.0, help="browsegp: sd (log units) of the log-normal prior on the fitted velocity parameters, centred on the start values")
     ap.add_argument("--lat", type=float, default=-14.0, help="browsegp: latitude for the Coriolis parameter (ring wavenumber, inertial block)")
     ap.add_argument("--no-block-outputs", action="store_true", help="browsegp, run_tile only: do not write the block-by-block fields (u_eddy = rotational only, u_m2, u_m2w, ...); u_eddy is then the total")
+
+
+def add_data_args(ap):
+    """Which data are used and where predictions are made: shared by fit_hyper.py and run_tile.py (the hyperparameter fit must see the same rows as the tile jobs)."""
+    ap.add_argument("--row-mask", default="all", choices=("all", "observed", "stencil"), help="stage-2 rows relative to the clouds: all (gap points included), observed (SST at the pixel and hour), stencil (cloud-margin mask: SST at t-1, t, t+1 and over the +-2 px gradient cross)")
+    ap.add_argument("--min-obs", type=int, default=2000, help="skip a tile (no tile file / no hyper fit) with fewer observed pixels or fewer stage-2 rows than this")
 
 
 def make_prior(a):

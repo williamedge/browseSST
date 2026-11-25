@@ -1104,3 +1104,52 @@ Run any script with `python -I` from outside the repo dir (e.g. `cd /tmp`), the 
 - Compare against the old per-snapshot code; tiling with overlap + partition-of-unity blending; HPC layer.
 - If m needed grows with domain size, consider Vecchia on the latent (u, v, S) prior with sparse H instead of
   on the data covariance (better screening when noise is large).
+
+## Exp 43 / v0.08 runs: fitted vs control (22 Nov 2026)
+
+- `run_v008_ring_d2` (v0.08 velocity parameters FITTED on 4 sample tiles): stage-2 fits not converged; c1 1.04/0.40(bound)/0.62/0.68 (v0.08: 1.456), d2 block went to ell 2 km (< 4.4 km pixel) with gamma 0.13-0.20, noise at its floor of 1.0 in 3 of 4 tiles; M2 ring wave rms 0.177 m/s (> barotropic tide 0.169), short-scale block max 2.75 m/s, speckled maps. Not trusted.
+- `run_v008_control` (v0.08 velocity parameters HELD FIXED, S / diurnal / noise / stage 1 fitted; env_2023_browsegp_control.sh, `submit_test.sh from-hyper`): all fits converged, noise free (pooled 1.39), eddy rms 0.091, M2 ring 0.143, short-scale 0.032, posterior sd u 0.12. Stage-2 loglik is 2200-3100 nats WORSE than the fitted run per tile (the fitted run's 2 km d2 block acts like noise proportional to the local gradient; hypothesis: ignored gradient error in stage 2).
+- No negative lobe in the M2 block's longitudinal correlation (ring of ~67 km would give one at 27-41 km): the M2 block in the posterior mean is large-scale blobs, not a clean ring.
+- `experiments/43_control_plots.py` (snapshots with drifters / ship ADCP / moorings, 5-day mooring series, subtidal series, scores). Only 3 of 6 mooring sites lie on model deep pixels (>=250 m); the in-situ data sit on the edge of the deep region. Hourly: obs vs tide corr 0.34 rmse 0.157; obs vs model total 0.28 / 0.174 (no gain over the tide). Subtidal: corr ~0 (obs has slow +-0.2 m/s flow that the eddy block, tau 3.4 d, does not carry). M2 harmonic: obs amp 0.10-0.19, tide amp 0.16-0.18 but phase 10-75 deg off; the M2 blocks shift the phase 10-16 deg towards the observed in 4 of 4 components at the two tide-supported sites, but lower the amplitude (total 0.11-0.13 vs obs 0.17-0.19). Site 5 (123.30E, 13.94S) has no barotropic tide support (tide 0): the M2 blocks alone give u amp 0.013 vs obs 0.104.
+
+- Exp 44 (`experiments/44_m2_variants.py`): stage-2 loglik, everything else at the control values, 72 h blocks at 5 May / 16 May: ring M2 + d2 best; plain M2 -223 / -352; ring without d2 -644 / -1322; plain without d2 -1034 / -2209; rot + d2 -730 / -819; rot only -1764 / -3012. Finer harmonic tide stage (100 / 60 km splines vs 150 km): M2 vector error at the moorings 0.18 -> 0.19 -> 0.43 m/s (obs amplitude 0.32): no help.
+- Exp 45 (`experiments/45_advective_budget.py`): the observed SUBTIDAL mooring flow (rms 0.12-0.17 m/s) is not visible in SST at this scale: large-scale |grad T| ~0.5 K/100 km, so -u.gradT rms 0.03-0.05 K/day against dT/dt rms 0.11 K/day (heating etc.), correlation 0.04 pooled. The eddy block shrinks to ~0 there because the data carry no information, not because the prior forbids it.
+
+## Future plan (user, 2026-11-22): staged tide / internal tide / residual fit
+
+1. Low-rank barotropic tide (M2, S2) on several years of Himawari. 2. Coherent (phase-locked) internal tide as a low-rank GP (inducing points) over months. 3. Fit the residual (eddies, incoherent tide) in tiles as now.
+Caveats recorded before starting: (a) the SST-tide error floor falls only like T^-0.28 (exp 38/39): 77 d -> 3 yr roughly halves it, which helps the barotropic tide (0.12-0.2 m/s) but the coherent internal tide (0.12-0.20 m/s at the moorings) is near the 77-day floor and finer scales have a higher floor: test with the control-frequency floor and an OSSE (SUNTANS) before the real data; (b) the baroclinic M2 is phase-locked across windows (R 0.63, exp 41) but not perfectly: allow a slowly varying complex amplitude (spatial GP x time knots of 2-4 weeks, or the existing decaying-cosine envelope) and fit month by month to check phase consistency; (c) the day-by-day nuisance (1-day knots) can mimic a 14.8-day modulated 12 h harmonic, i.e. overlap M2; multi-year averaging should separate it (weather modulation is not locked to 14.8 d) but check; (d) ring-kernel inducing points need spacing below ~lambda/3 (~20 km for 67 km): ~300-600 points over the box, cost N m^2 and linear in the data; (e) validation: step 1 vs the mooring plane, step 2 out of sample (fit other years, score the 2023 moorings), step 3 vs drifters / ADCP; (f) no FES (user: not reliable here); (g) steps 1-2 uncertainty is not propagated into step 3 (plug-in).
+
+## Exp 46-49 (2026-11-24): M2 animation, Hovmoller, leakage, anisotropic ring
+
+- Exp 46 / 47 (`46_m2_animation.py`, `47_m2_hovmoller.py`): M2 block animation and u / v time-longitude diagrams at 13.59 S, 3-7 May: quiet spells show smooth slanted 12.4 h stripes, 4-6 May a burst (rms 0.145 vs 0.08-0.09) of pixel-scale speckle, strongest in v.
+- The M2 block amplitude tracks cloud gaps: daily corr(M2 rms, missing-SST fraction) = 0.75 over 64 days (tide strength 0.17). Hypothesis: partly clouded pixels / cloud edges give spurious dT/dt; untested fix = mask a 1-2 px margin around gaps.
+- Exp 48 (`48_m2_leakage.py`, one window; the second was OOM-killed): M2 part from a prior with only div + d2 vs the full prior (parameters fixed): corr 0.99-1.00, rms diff 0.015-0.029 vs M2 rms 0.14-0.17. The rotational block does not leak into M2 (frequency separation).
+- Anisotropic ring for the M2 divergent block (browseGP `_ring_div_components_aniso_njit`; `kernels` cov vector 36 entries: weights [29:34] + s, theta at [34:36]; `BrowseGPPrior(div_kernel='ring_aniso')` with `ell_div` (across the crests), `aniso_div` s, `theta_div`; `hpc/browsegp_vel_v008_aniso60x180.json`, env `BSST_VEL_JSON`, `--div-kernel ring_aniso`; test added). User's L_x 60 / L_y 180 = ell 60 km, s 3, theta pi/2 (crests along y).
+- Exp 49 (`49_aniso_ring_variants.py`; stage-2 loglik, everything else at the control values; local machine OOM-kills the 72 h / nnum 100 setting, so 48 h / nnum 80 and 28 h windows): user's aniso vs isotropic control: -298 (5 May), -35 (16 May) at nnum 80; at nnum 60 / 140 on a 28 h window -286 / -183. Swapped orientation (crests along x) -258 / -35, and -171 / -77; browseGP's own fitted aniso (90 km, s 1.19) -42 / -9 and -36 / +2; isotropic ell 60 km +88 / +6 and +84 / +51; isotropic 180 km ~0. The loglik changes by ~5400 between nnum 60 and 140 (not converged) and the aniso penalty shrinks with nnum: the Vecchia neighbour metric is isotropic, so part of the aniso penalty is approximation error. No support for s = 3 in these windows.
+
+## Exp 50: cloud mask on stage-2 rows (2026-11-25)
+
+Difference from the original method: it made a row only where finite differences of OBSERVED SST existed; our `stage2_rows` takes derivatives from the latent-T GP and keeps rows inside gaps (only filter: sd(dT/dt) <= 3 x median).
+New `PipelineConfig.row_mask` = 'all' (default, unchanged behaviour) | 'observed' | 'stencil' (SST at t-1, t, t+1 and the +-2 px cross). Stage 1 uses all SST; predictions everywhere. Not yet an HPC flag.
+`experiments/50_cloud_mask.py`: one 36 x 36 px x 72 h block (5 May 2023 burst), control hyper (S / noise NOT refitted), nnum 80. Rows: 71342 / 66169 / 58253.
+- Ring M2 rms per component, cloudy bins (obs frac 0.4-0.9): all 0.18-0.20, observed 0.12-0.15, stencil 0.075-0.082 (flat across cloud bins). Prior rms of the ring is 0.117.
+- d2 block: 0.059-0.070 -> 0.021-0.024 ('observed') -> 0.012-0.013 ('stencil'): driven by gap-interior rows. Rotational: unchanged by 'observed', lower and flat with 'stencil'.
+- Clear period (4 May 00-18, obs frac 0.997): the three agree (corr 0.95-0.99, same rms). Obs-frac 0.9-1.0 bin over the whole interior drops 0.103 -> 0.075 (includes times next to the cloud).
+- Local 'all' vs HPC control: corr 0.90-0.94 in the clear period, 0.43-0.46 during the burst (the burst is sensitive to block / nnum settings).
+- Conclusion: the burst comes mainly from rows inside and next to cloud gaps. Limits: one block, one window chosen for the burst; no random-thinning control; no accuracy check (no mooring in the block); noise / S not refitted.
+- Memory: `SpaceTimeGP.pred_neighbours` now queries in batches of 10k (`model.NN_BATCH`); same neighbours; peak 2.0-2.2 GB (was killed above 2.8 GB).
+Correction to the cloud-binned numbers quoted before Exp 50: `u_m2` is the ring block only (d2 is `u_m2w`), so its prior rms is 0.117.
+
+### Exp 50 follow-up: HPC run set up (2026-11-25)
+User: run the stencil mask as a full HPC run, drop tiles without enough data, predict only where there is data (in-sample only).
+`PipelineConfig.predict_at` = 'all' | 'rows' (rows: ALL outputs NaN except at stage-2 rows; values identical to 'all' there, tested). Early skip from the masks (`pipeline.candidate_rows`); `fit_hyper` returns None
+(no file, exit 0) for a sparse sample tile, which would otherwise crash and block the afterok chain. HPC: `--row-mask`, `--predict-at`, `--min-obs` / BSST_ROW_MASK, BSST_PREDICT_AT, BSST_MIN_ROWS;
+`hpc/env_2023_browsegp_control_stencil.sh` -> run_v008_control_stencil.
+Counts from the cube (masks only): the same 45 of 99 tiles as the control pass (the rest have 0-1278 stencil rows, so any threshold in 1279-10000 gives the same set); the 4 sample tiles have 27.6k-39.2k rows in the central 72 h
+(50.8k deep grid points; 41.5k-49.7k observed). Expected output coverage relative to the control's deep pixel-hours: 0.61 (control: 0.81 of them observed); 9 % of hours keep < 10 % coverage, 67 % keep > 50 %.
+A +-1 px margin would give 0.66 (needs 2nd-order gradients; untested).
+End-to-end through `run_test.py` with the stencil env file on a small real cutout (32 x 32 px x 96 h, 8 tiles, hyper in pilot mode): all stages exit 0, 2 sparse tiles skipped, merge used 6 of 8; merged output is finite only inside
+the stencil mask and below 250 m, same NaN pattern in every predicted field. (The 4 sample tiles had enough rows, so the sample-tile skip is covered by the unit test only. `submit_test.sh` / SLURM not run here.)
+Noise bound: all 4 pilot fits end at noise = 1.0 = the prior's lower bound (control fits: 1.14-3.72). ML noise with S held at the pilot values (24 h, 2 tiles): t00_01_00 0.46 (all) / 0.46 (stencil); t01_01_00 22.8 (all) / 0.68 (stencil).
+Bound left at 1.0 (comparable with the control; sigma_S^2 is ~100-370 in the same units).

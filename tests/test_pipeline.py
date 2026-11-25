@@ -7,6 +7,7 @@ import pathlib
 import sys
 import tempfile
 import time
+import types
 
 import numpy as np
 import xarray as xr
@@ -509,3 +510,92 @@ if __name__ == "__main__":
                 print(f"FAIL {name}: {e!r}")
                 fails += 1
     sys.exit(1 if fails else 0)
+
+
+def test_browsegp_anisotropic_ring_matches_browsegp_and_reduces_to_the_isotropic_ring():
+    """`div_kernel='ring_aniso'` (L_x = 60 km across the crests, L_y = 180 km along them: ell_div = 60e3, aniso_div = 3, theta_div = pi/2) is browseGP's anisotropic ring tensor with the amplitude from
+    `ring_sigma_aniso`; s = 1 reproduces the isotropic ring for any theta; the block weights stay in [29:34]; the blocks still partition the cross covariance; the fit slots keep the sigma consistent."""
+    from browseGP.covariance import helmholtz_ring_numba as RN
+    from browseGP.covariance import helmholtz_numba as HN
+    from inversion_sst_gp.spacetime import kernels as K
+    from inversion_sst_gp.spacetime.tides import omega_of
+    vel = dict(_BG_VEL); vel.update(ell_div=60e3, aniso_div=3.0, theta_div=np.pi / 2, tau_div=5.46e5, c1=1.456, gamma_div=0.117, gamma_d2=0.042, ell_d2=7.3e3, tau_d2=3.39e5)
+    pr = P.BrowseGPPrior(vel, blocks=("rot", "div", "d2"), div_kernel="ring_aniso", lat=-13.8)
+    h2 = pr.complete(dict(P.DEFAULT_STAGE2))
+    cp = pr.cov_params(h2)
+    om = omega_of("M2"); f = 2 * 7.2921159e-5 * np.sin(np.deg2rad(13.8)); k1 = np.sqrt(om ** 2 - f ** 2) / 1.456
+    assert cp.size == 36 and cp[34] == 3.0 and abs(cp[35] - np.pi / 2) < 1e-15 and np.all(cp[29:34] == 1.0)
+    assert abs(cp[4] - RN.ring_sigma_aniso(0.117, 60e3, k1, 3.0)) < 1e-12
+    rng = np.random.default_rng(7)
+    X = np.c_[rng.uniform(-1.2e5, 1.2e5, (40, 2)), rng.uniform(0, 2e5, 40), rng.normal(size=(40, 2)), np.ones(40)]
+    for i in range(20):
+        x1, x2 = X[i], X[i + 20]
+        dx, dy, tau = x1[0] - x2[0], x1[1] - x2[1], x1[2] - x2[2]
+        cuu, cvv, cuv = RN._ring_div_components_aniso_njit(dx, dy, cp[4], cp[5], k1, 3.0, np.pi / 2)
+        tw = HN.temporal_wave_njit(tau, cp[6], cp[7], cp[8], cp[9])
+        cu2, cv2, cuv2 = HN._div_components_njit(dx, dy, cp[10], cp[11]); t2 = HN.temporal_wave_njit(tau, cp[12], cp[13], cp[14], cp[15])
+        cr, cvr, cuvr = HN._rot_components_njit(dx, dy, cp[0], cp[1]); tr = HN.temporal_matern_njit(tau, cp[2], cp[3])
+        Cuu, Cvv, Cuv = cuu * tw + cu2 * t2 + cr * tr, cvv * tw + cv2 * t2 + cvr * tr, cuv * tw + cuv2 * t2 + cuvr * tr
+        KS = HN._scalar_matern_njit(np.hypot(dx, dy), cp[24], cp[25]) * HN.temporal_matern_njit(tau, cp[26], cp[27])
+        want = x1[3] * x2[3] * Cuu + x1[4] * x2[4] * Cvv + (x1[3] * x2[4] + x1[4] * x2[3]) * Cuv + x1[5] * x2[5] * KS
+        assert abs(K.browsegp_transport_covfunc(x1, x2, cp) - want) < 1e-9 * max(1.0, abs(want))
+    # s = 1: any theta gives the isotropic ring (same covariance as the 29-entry isotropic vector with the same sigma)
+    vi = dict(vel); vi.update(aniso_div=1.0, theta_div=0.7)
+    pa = P.BrowseGPPrior(vi, blocks=("rot", "div", "d2"), div_kernel="ring_aniso", lat=-13.8); pi_ = P.BrowseGPPrior(vi, blocks=("rot", "div", "d2"), div_kernel="ring", lat=-13.8)
+    ca, ci = pa.cov_params(h2), pi_.cov_params(h2)
+    for i in range(20):
+        assert abs(K.browsegp_transport_covfunc(X[i], X[i + 20], ca) - K.browsegp_transport_covfunc(X[i], X[i + 20], ci)) < 1e-10
+    # the blocks partition the cross covariance, the weights vector keeps s, theta
+    a = np.r_[0.0, 0.0, 5e4, 1.0, 0.0, 0.0]; x = X[3].copy(); x[5] = 1.0
+    cb = pr.cov_params_blocks(h2, ("div",))
+    assert cb.size == 36 and cb[34] == 3.0 and list(cb[29:34]) == [0.0, 1.0, 0.0, 0.0, 0.0]
+    parts = [K.browsegp_transport_covfunc(a, x, pr.cov_params_blocks(h2, (b,))) for b in ("rot", "div", "d2")]
+    assert abs(sum(parts) - K.browsegp_transport_covfunc(a, x, cp)) < 1e-12
+    # fit slots: gamma_div keeps the anisotropic sigma
+    from inversion_sst_gp.spacetime.fit import params_to_model_args
+    q = dict(h2); q.update(gamma_div=0.2, ell_div=50e3)
+    cov, _, _ = params_to_model_args(q, cp, pr.slots)
+    assert abs(cov[4] - RN.ring_sigma_aniso(0.2, 50e3, k1, 3.0)) < 1e-12 and cov.size == 36
+
+
+def test_cloud_row_mask_modes_against_a_direct_loop():
+    rng = np.random.default_rng(3)
+    nt, ny, nx = 5, 9, 8
+    obs = rng.random((nt, ny, nx)) > 0.08
+    td = types.SimpleNamespace(obs=obs.ravel(), shape=(nt, ny, nx), x=np.zeros(obs.size))
+    assert P.cloud_row_mask(td, "all").all()
+    assert np.array_equal(P.cloud_row_mask(td, "observed"), obs.ravel())
+    want = np.zeros_like(obs)
+    for k in range(1, nt - 1):
+        for j in range(2, ny - 2):
+            for i in range(2, nx - 2):
+                want[k, j, i] = obs[k - 1:k + 2, j, i].all() and obs[k, j - 2:j + 3, i].all() and obs[k, j, i - 2:i + 3].all()
+    got = P.cloud_row_mask(td, "stencil").reshape(obs.shape)
+    assert want.any() and np.array_equal(got, want)
+
+
+
+def test_in_sample_prediction_equals_the_full_one_at_the_rows_and_sparse_tiles_are_skipped():
+    rng = np.random.default_rng(5)
+    nt, ny, nx = 12, 12, 12
+    lon, lat = 122.0 + 0.04 * np.arange(nx), -14.0 + 0.04 * np.arange(ny)
+    t = np.datetime64("2023-05-01T00") + np.arange(nt) * np.timedelta64(1, "h")
+    sst = 300.0 + 0.3 * np.sin(np.arange(nx) / 2.0)[None, None, :] + 0.01 * rng.standard_normal((nt, ny, nx))
+    sst[4:7, 3:6, 5:8] = np.nan                                                      # a cloud
+    cube = xr.Dataset({"sst": (("time", "lat", "lon"), sst)}, coords={"time": t.astype("datetime64[ns]"), "lat": lat, "lon": lon})
+    td = TL.extract_tile(cube, TL.TileSpec("a", 0, nt, 0, ny, 0, nx, 0, nt, 0, ny, 0, nx))
+    hyper = P.Hyper.default()
+    base = dict(nnum=20, nnum_pred=30, min_obs=50, min_cover=0.0, row_mask="stencil")
+    full = P.run_tile(td, hyper, P.PipelineConfig(**base), log=None)
+    ins = P.run_tile(td, hyper, P.PipelineConfig(predict_at="rows", **base), log=None)
+    rows = np.isfinite(ins["u"])
+    assert rows.sum() == ins["info"]["n_pred"] == ins["info"]["n_stage2"] > 50
+    assert not (rows & ~td.obs.reshape(td.shape)).any() and not rows[4:7, 3:6, 5:8].any()
+    for f in ("T", "Tt", "u", "v", "u_eddy", "S", "var_u", "u_tide"):
+        assert np.array_equal(np.isfinite(ins[f]), rows), f
+        assert np.allclose(ins[f][rows], full[f][rows], rtol=1e-8, atol=1e-12), f
+    assert np.isfinite(full["u"]).sum() > rows.sum()
+    many = P.PipelineConfig(**{**base, "min_obs": 10 ** 6}, predict_at="rows")
+    assert P.run_tile(td, hyper, many, log=None) is None and P.fit_hyper(td, hyper, many, log=None) is None
+    few = P.PipelineConfig(**{**base, "min_obs": P.candidate_rows(td, P.PipelineConfig(**base)) + 1})
+    assert td.n_obs >= few.min_obs and P.run_tile(td, hyper, few, log=None) is None and P.fit_hyper(td, hyper, few, log=None) is None

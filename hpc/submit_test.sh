@@ -16,6 +16,7 @@ echo "BSST_RUN       : $RUN"
 echo "BSST_PRIOR     : ${BSST_PRIOR:-helmholtz (default)}   blocks: ${BSST_BLOCKS:-rot,div,d2}   M2 wave kernel: ${BSST_DIV_KERNEL:-ring}   free velocity: ${BSST_FREE_VEL-rot,div,d2}   kept fixed: ${BSST_FIX_VEL-ell_div,tau_div}   (an EMPTY BSST_FREE_VEL keeps browseGP's velocity values fixed)"
 echo "BSST_MIN_DEPTH : ${BSST_MIN_DEPTH:-100} m (tide fit and tile coverage rule)"
 echo "BSST_FIT_HOURS : ${BSST_FIT_HOURS:-0} (0 = the whole sample tile)   BSST_TIDE_SOURCE: ${BSST_TIDE_SOURCE:-fit}   core/buffer: ${BSST_CORE:-168,28,28} / ${BSST_BUFFER:-12,4,4}"
+echo "BSST_ROW_MASK  : ${BSST_ROW_MASK:-all}   predict at: ${BSST_PREDICT_AT:-all}   min rows per tile: ${BSST_MIN_ROWS:-2000}"
 if [ -z "${BSST_PRIOR:-}" ] || [ "${BSST_PRIOR}" != "browsegp" ]; then echo "NOTE: BSST_PRIOR is not 'browsegp': the default Helmholtz-Matern prior will be used"; fi
 if [ -d "$RUN" ] && [ -n "$(ls -A "$RUN" 2>/dev/null)" ]; then echo "NOTE: $RUN already has content (existing tile files are skipped by run_tile.py, hyper / tide are overwritten)"; fi
 echo "======================================================"

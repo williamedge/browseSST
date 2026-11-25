@@ -1,0 +1,18 @@
+{
+ "gamma_rot": 0.0870248,
+ "ell_rot": 32399.4,
+ "tau_rot": 294992.0,
+ "gamma_div": 0.116915,
+ "ell_div": 60000.0,
+ "aniso_div": 3.0,
+ "theta_div": 1.5707963267948966,
+ "tau_div": 546273.0,
+ "c1": 1.45643,
+ "gamma_d2": 0.0422773,
+ "ell_d2": 7348.43,
+ "tau_d2": 339390.0,
+ "gamma_f": 0.0737319,
+ "ell_f": 2708.5,
+ "tau_f": 3902.94,
+ "_source": "browseGP v0.08 iso values (hpc/browsegp_vel_v008.json) with the M2 divergent block's kernel anisotropic (user, 2026-11-24): L_x = 60 km across the crests, L_y = 180 km along them (aniso_div s = 3, theta_div = pi/2: crests along y). Use with --div-kernel ring_aniso / BSST_DIV_KERNEL=ring_aniso. Everything else unchanged."
+}
